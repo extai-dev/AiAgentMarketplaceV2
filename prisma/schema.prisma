@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  email         String?
+  name          String?
+  role          String   @default("user")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agents        Agent[]
+  bids          Bid[]
+  assignedTasks Task[]   @relation("AgentTasks")
+  createdTasks  Task[]   @relation("CreatorTasks")
+}
+
+model TaskCounter {
+  id    Int @id @default(autoincrement())
+  value Int @default(0)
+}
+
+model Task {
+  id              String          @id @default(cuid())
+  numericId       Int             @unique
+  title           String
+  description     String
+  reward          Float
+  tokenSymbol     String          @default("TT")
+  tokenAddress    String?
+  escrowAddress   String?
+  status          TaskStatus      @default(OPEN)
+  creatorId       String
+  agentId         String?
+  onChainId       Int?
+  escrowDeposited Boolean         @default(false)
+  txHash          String?
+  resultHash      String?
+  deadline        DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  dispatches      AgentDispatch[]
+  bids            Bid[]
+  agent           User?           @relation("AgentTasks", fields: [agentId], references: [id])
+  creator         User            @relation("CreatorTasks", fields: [creatorId], references: [id])
+}
+
+model Bid {
+  id            String    @id @default(cuid())
+  taskId        String
+  agentId       String
+  amount        Float
+  message       String?
+  status        BidStatus @default(PENDING)
+  txHash        String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  submittedById String?
+  task          Task      @relation(fields: [taskId], references: [id])
+  user          User      @relation(fields: [agentId], references: [id])
+  submittedBy   Agent?    @relation(fields: [submittedById], references: [id])
+}
+
+model Agent {
+  id              String          @id @default(cuid())
+  name            String
+  description     String?
+  ownerId         String
+  walletAddress   String          @unique
+  criteria        String          @default("{}")
+  execUrl         String?
+  apiTokenHash    String?
+  status          AgentStatus     @default(ACTIVE)
+  lastSeen        DateTime?
+  lastError       String?
+  totalDispatches Int             @default(0)
+  totalBids       Int             @default(0)
+  acceptedBids    Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  owner           User            @relation(fields: [ownerId], references: [id])
+  dispatches      AgentDispatch[]
+  logs            AgentLog[]
+  bids            Bid[]
+
+  @@index([ownerId])
+  @@index([status])
+}
+
+model AgentDispatch {
+  id           String         @id @default(cuid())
+  agentId      String
+  taskId       String
+  status       DispatchStatus @default(PENDING)
+  responseCode Int?
+  responseData String?
+  dispatchedAt DateTime       @default(now())
+  respondedAt  DateTime?
+  durationMs   Int?
+  errorMessage String?
+  retryCount   Int            @default(0)
+  task         Task           @relation(fields: [taskId], references: [id])
+  agent        Agent          @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, dispatchedAt])
+  @@index([taskId])
+  @@index([status])
+}
+
+model AgentLog {
+  id        String   @id @default(cuid())
+  agentId   String
+  level     LogLevel @default(INFO)
+  action    String
+  taskId    String?
+  message   String
+  metadata  String?
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, createdAt])
+  @@index([level])
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+  CLOSED
+  CANCELLED
+}
+
+enum BidStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum AgentStatus {
+  ACTIVE
+  PAUSED
+  OFFLINE
+  ERROR
+}
+
+enum DispatchStatus {
+  PENDING
+  SENT
+  SUCCESS
+  FAILED
+  TIMEOUT
+  SKIPPED
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
