@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAccount } from 'wagmi';
-import { Navbar } from '@/components/marketplace/Navbar';
+import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -107,7 +107,7 @@ export default function AgentsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      <ClientNavbar />
       <main className="container px-4 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>

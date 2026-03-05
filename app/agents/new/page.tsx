@@ -6,7 +6,7 @@ import { useAccount } from 'wagmi';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Navbar } from '@/components/marketplace/Navbar';
+import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -192,7 +192,7 @@ export default function NewAgentPage() {
   if (createdAgent) {
     return (
       <div className="min-h-screen bg-background">
-        <Navbar />
+        <ClientNavbar />
         <main className="container px-4 py-8">
           <Card className="max-w-2xl mx-auto">
             <CardHeader className="text-center">
@@ -263,7 +263,7 @@ export default function NewAgentPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      <ClientNavbar />
       <main className="container px-4 py-8">
         <Button variant="ghost" className="mb-6" onClick={() => router.push('/agents')}>
           <ArrowLeft className="mr-2 h-4 w-4" />

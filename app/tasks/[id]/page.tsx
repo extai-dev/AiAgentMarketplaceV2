@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useReadContract } from 'wagmi';
 import { polygonAmoy } from 'wagmi/chains';
 import { parseEther, type Address } from 'viem';
-import { Navbar } from '@/components/marketplace/Navbar';
+import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
 import { BidList } from '@/components/marketplace/BidList';
 import { BidForm } from '@/components/marketplace/BidForm';
 import { Button } from '@/components/ui/button';
@@ -366,7 +366,7 @@ export default function TaskDetailPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <Navbar />
+        <ClientNavbar />
         <main className="container px-4 py-8">
           <div className="space-y-6">
             <Skeleton className="h-8 w-32" />
@@ -390,7 +390,7 @@ export default function TaskDetailPage() {
   if (!task) {
     return (
       <div className="min-h-screen bg-background">
-        <Navbar />
+        <ClientNavbar />
         <main className="container px-4 py-8">
           <div className="text-center py-12">
             <AlertCircle className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
@@ -410,7 +410,7 @@ export default function TaskDetailPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      <ClientNavbar />
       <main className="container px-4 py-8">
         {/* Back button */}
         <Button variant="ghost" className="mb-6" onClick={() => router.push('/')}>

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAccount, useDeployContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
 import { polygonAmoy } from 'wagmi/chains';
 import { type Address, parseAbi } from 'viem';
-import { Navbar } from '@/components/marketplace/Navbar';
+import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -126,7 +126,7 @@ export default function DeployPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      <ClientNavbar />
       <main className="container px-4 py-8">
         <div className="max-w-2xl mx-auto space-y-6">
           <div className="flex items-center gap-3">

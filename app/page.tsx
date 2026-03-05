@@ -1,51 +1,57 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { useAccount } from 'wagmi';
-import { Navbar } from '@/components/marketplace/Navbar';
-import { TaskCard } from '@/components/marketplace/TaskCard';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useEffect, useState } from "react";
+import { useAccount } from "wagmi";
+import { ClientNavbar } from "@/components/marketplace/ClientNavbar";
+import { TaskCard } from "@/components/marketplace/TaskCard";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Skeleton } from '@/components/ui/skeleton';
-import { useStore, Task, TaskStatusType } from '@/store/useStore';
-import { 
-  Search, 
-  Filter, 
-  Plus, 
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useStore, Task, TaskStatusType } from "@/store/useStore";
+import {
+  Search,
+  Filter,
+  Plus,
   Loader2,
   FileText,
   TrendingUp,
-  Clock
-} from 'lucide-react';
-import Link from 'next/link';
+  Clock,
+} from "lucide-react";
+import Link from "next/link";
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const { address, isConnected } = useAccount();
-  const { tasks, setTasks, user, setUser, isLoading, setIsLoading } = useStore();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState('all');
+  const { tasks, setTasks, user, setUser, isLoading, setIsLoading } =
+    useStore();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState("all");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Fetch tasks on mount
   useEffect(() => {
     const fetchTasks = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch('/api/tasks?limit=50');
+        const response = await fetch("/api/tasks?limit=50");
         const data = await response.json();
         if (data.success) {
           setTasks(data.data);
         }
       } catch (error) {
-        console.error('Failed to fetch tasks:', error);
+        console.error("Failed to fetch tasks:", error);
       } finally {
         setIsLoading(false);
       }
@@ -59,9 +65,9 @@ export default function Home() {
     const syncUser = async () => {
       if (address && !user) {
         try {
-          const response = await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+          const response = await fetch("/api/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ walletAddress: address }),
           });
           const data = await response.json();
@@ -69,7 +75,7 @@ export default function Home() {
             setUser(data.data);
           }
         } catch (error) {
-          console.error('Failed to sync user:', error);
+          console.error("Failed to sync user:", error);
         }
       }
     };
@@ -78,38 +84,41 @@ export default function Home() {
 
   // Filter tasks
   const filteredTasks = tasks.filter((task) => {
-    const matchesSearch = 
+    const matchesSearch =
       task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       task.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
-    
+    const matchesStatus =
+      statusFilter === "all" || task.status === statusFilter;
+
     // Tab filtering
     let matchesTab = true;
-    if (activeTab === 'my-tasks' && user) {
+    if (activeTab === "my-tasks" && user) {
       // Show tasks user created OR is assigned to as agent
       matchesTab = task.creatorId === user.id || task.agentId === user.id;
-    } else if (activeTab === 'assigned' && user) {
+    } else if (activeTab === "assigned" && user) {
       // Show only tasks assigned to user as agent
       matchesTab = task.agentId === user.id;
-    } else if (activeTab === 'open') {
-      matchesTab = task.status === 'OPEN';
+    } else if (activeTab === "open") {
+      matchesTab = task.status === "OPEN";
     }
-    
+
     return matchesSearch && matchesStatus && matchesTab;
   });
 
   // Stats
   const stats = {
     total: tasks.length,
-    open: tasks.filter(t => t.status === 'OPEN').length,
-    inProgress: tasks.filter(t => t.status === 'IN_PROGRESS').length,
-    completed: tasks.filter(t => t.status === 'COMPLETED' || t.status === 'CLOSED').length,
+    open: tasks.filter((t) => t.status === "OPEN").length,
+    inProgress: tasks.filter((t) => t.status === "IN_PROGRESS").length,
+    completed: tasks.filter(
+      (t) => t.status === "COMPLETED" || t.status === "CLOSED",
+    ).length,
   };
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
-      
+      <ClientNavbar />
+
       <main className="container px-4 py-8">
         {/* Hero Section */}
         <div className="mb-8">
@@ -117,7 +126,8 @@ export default function Home() {
             Decentralized AI Agent Task Marketplace
           </h1>
           <p className="text-muted-foreground text-lg">
-            Post tasks, receive bids from AI agents, and pay securely via smart contracts
+            Post tasks, receive bids from AI agents, and pay securely via smart
+            contracts
           </p>
         </div>
 
@@ -142,14 +152,18 @@ export default function Home() {
               <Clock className="h-4 w-4" />
               <span className="text-sm">In Progress</span>
             </div>
-            <p className="text-2xl font-bold text-yellow-500">{stats.inProgress}</p>
+            <p className="text-2xl font-bold text-yellow-500">
+              {stats.inProgress}
+            </p>
           </div>
           <div className="bg-card border rounded-lg p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <FileText className="h-4 w-4" />
               <span className="text-sm">Completed</span>
             </div>
-            <p className="text-2xl font-bold text-green-500">{stats.completed}</p>
+            <p className="text-2xl font-bold text-green-500">
+              {stats.completed}
+            </p>
           </div>
         </div>
 
@@ -178,7 +192,7 @@ export default function Home() {
               <SelectItem value="CANCELLED">Cancelled</SelectItem>
             </SelectContent>
           </Select>
-          {isConnected && (
+          {mounted && isConnected && (
             <Button asChild className="gap-2 w-full sm:w-auto">
               <Link href="/tasks/new">
                 <Plus className="h-4 w-4" />
@@ -189,7 +203,12 @@ export default function Home() {
         </div>
 
         {/* Tabs */}
-        <Tabs defaultValue="all" value={activeTab} onValueChange={setActiveTab} className="mb-6">
+        <Tabs
+          defaultValue="all"
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className="mb-6"
+        >
           <TabsList>
             <TabsTrigger value="all">All Tasks</TabsTrigger>
             <TabsTrigger value="open">Open Tasks</TabsTrigger>
@@ -218,11 +237,11 @@ export default function Home() {
             <FileText className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No tasks found</h3>
             <p className="text-muted-foreground mb-4">
-              {searchQuery || statusFilter !== 'all'
-                ? 'Try adjusting your filters'
-                : 'Be the first to post a task!'}
+              {searchQuery || statusFilter !== "all"
+                ? "Try adjusting your filters"
+                : "Be the first to post a task!"}
             </p>
-            {isConnected && (
+            {mounted && isConnected && (
               <Button asChild className="gap-2">
                 <Link href="/tasks/new">
                   <Plus className="h-4 w-4" />
@@ -244,7 +263,8 @@ export default function Home() {
       <footer className="border-t mt-12 py-6">
         <div className="container px-4 text-center text-sm text-muted-foreground">
           <p>
-            Decentralized AI Agent Task Marketplace • Built with Next.js, Solidity, and wagmi
+            Decentralized AI Agent Task Marketplace • Built with Next.js,
+            Solidity, and wagmi
           </p>
         </div>
       </footer>

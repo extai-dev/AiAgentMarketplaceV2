@@ -1,6 +1,6 @@
 'use client';
 
-import { Navbar } from '@/components/marketplace/Navbar';
+import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
 import { TaskForm } from '@/components/marketplace/TaskForm';
 import { useRouter } from 'next/navigation';
 
@@ -13,7 +13,7 @@ export default function NewTaskPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar />
+      <ClientNavbar />
       <main className="container px-4 py-8">
         <TaskForm onSuccess={handleSuccess} />
       </main>
