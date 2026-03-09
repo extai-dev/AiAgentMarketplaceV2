@@ -13,6 +13,11 @@ export const NEW_ADDRESSES = {
   escrow: '0x6D6263c3742A855E853C9520517ABB1D168CF0F9',
 };
 
+// ERC-8004 Registry Address
+// This is the global registry for ERC-8004 agent identity
+// Deployed on Polygon Amoy: 0x8004A818BFB912233c491871b3d84c89A494BD9e
+export const ERC8004_REGISTRY_ADDRESS = process.env.NEXT_PUBLIC_ERC8004_REGISTRY_ADDRESS || '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+
 // SIMPLE_ESCROW - Minimal escrow contract (deposit/release only)
 // Deployed on Polygon Amoy: 0x74354363197be7f66afab0421f05c35380ed5417
 export const SIMPLE_ESCROW_ADDRESS = process.env.NEXT_PUBLIC_SIMPLE_ESCROW_ADDRESS || '0x74354363197be7f66afab0421f05c35380ed5417';

@@ -1,688 +1,327 @@
-'use client';
+'use client'
 
-import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
-import { useAccount } from 'wagmi';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
-import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { useToast } from '@/hooks/use-toast';
-import { Agent, AgentStatusType } from '@/store/useStore';
-import {
-  ArrowLeft,
-  Bot,
-  Settings,
-  Activity,
-  Clock,
-  AlertCircle,
-  CheckCircle2,
-  Pause,
-  Play,
-  Copy,
-  Check,
-  ExternalLink,
-  RefreshCw,
-  Coins,
-  MessageSquare,
-  Loader2,
-  Wifi,
-  WifiOff,
-  Key,
-  Trash2
-} from 'lucide-react';
-import { formatDistanceToNow, format } from 'date-fns';
+import { useEffect, useState } from 'react'
+import { useParams, useRouter } from 'next/navigation'
 
-const agentEditSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters').max(50, 'Name too long'),
-  description: z.string().max(500, 'Description too long').optional(),
-  execUrl: z.string().url('Must be a valid URL').optional().or(z.literal('')),
-  status: z.enum(['ACTIVE', 'PAUSED']),
-  criteria: z.object({
-    minReward: z.number().min(0).optional(),
-    maxReward: z.number().min(0).optional(),
-    keywords: z.array(z.string()).optional(),
-    categories: z.array(z.string()).optional(),
-    requireEscrow: z.boolean().optional(),
-    excludeKeywords: z.array(z.string()).optional(),
-  }),
-});
+interface Agent {
+  id: string
+  name: string
+  description: string
+  capabilities: string[]
+  protocols: string[]
+  dispatchEndpoint: string
+  source: 'local' | 'erc8004' | 'installed'
+  installedBy?: string
+  installedAt?: string
+  verified: boolean
+  metadata?: any
+}
 
-type AgentEditForm = z.infer<typeof agentEditSchema>;
-
-const statusConfig: Record<AgentStatusType, { label: string; color: string; bgColor: string }> = {
-  ACTIVE: { label: 'Active', color: 'text-green-600', bgColor: 'bg-green-100 dark:bg-green-900' },
-  PAUSED: { label: 'Paused', color: 'text-yellow-600', bgColor: 'bg-yellow-100 dark:bg-yellow-900' },
-  OFFLINE: { label: 'Offline', color: 'text-gray-600', bgColor: 'bg-gray-100 dark:bg-gray-900' },
-  ERROR: { label: 'Error', color: 'text-red-600', bgColor: 'bg-red-100 dark:bg-red-900' },
-};
+interface Review {
+  id: string
+  userName: string
+  rating: number
+  comment: string
+  createdAt: string
+}
 
 export default function AgentDetailPage() {
-  const router = useRouter();
-  const params = useParams();
-  const agentId = params.id as string;
-  const { address: connectedWallet } = useAccount();
-  const { toast } = useToast();
-
-  const [agent, setAgent] = useState<Agent | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isRegeneratingToken, setIsRegeneratingToken] = useState(false);
-  const [newApiToken, setNewApiToken] = useState<string | null>(null);
-  const [copiedToken, setCopiedToken] = useState(false);
-  const [keywordInput, setKeywordInput] = useState('');
-  const [excludeKeywordInput, setExcludeKeywordInput] = useState('');
-
-  const form = useForm<AgentEditForm>({
-    resolver: zodResolver(agentEditSchema),
-    defaultValues: {
-      name: '',
-      description: '',
-      execUrl: '',
-      status: 'ACTIVE',
-      criteria: {
-        minReward: 0,
-        maxReward: 1000,
-        keywords: [],
-        categories: [],
-        requireEscrow: false,
-        excludeKeywords: [],
-      },
-    },
-  });
+  const params = useParams()
+  const router = useRouter()
+  const [agent, setAgent] = useState<Agent | null>(null)
+  const [reviews, setReviews] = useState<Review[]>([])
+  const [loading, setLoading] = useState(true)
+  const [isInstalled, setIsInstalled] = useState(false)
+  const [newRating, setNewRating] = useState(0)
+  const [newComment, setNewComment] = useState('')
+  const [submittingReview, setSubmittingReview] = useState(false)
 
   useEffect(() => {
-    const fetchAgent = async () => {
-      try {
-        const response = await fetch(`/api/agents/${agentId}`);
-        const data = await response.json();
-
-        if (data.success) {
-          setAgent(data.data);
-          form.reset({
-            name: data.data.name,
-            description: data.data.description || '',
-            execUrl: data.data.execUrl || '',
-            status: data.data.status,
-            criteria: data.data.criteria || {
-              minReward: 0,
-              maxReward: 1000,
-              keywords: [],
-              categories: [],
-              requireEscrow: false,
-              excludeKeywords: [],
-            },
-          });
-        } else {
-          throw new Error(data.error || 'Agent not found');
-        }
-      } catch (error: any) {
-        console.error('Failed to fetch agent:', error);
-        toast({
-          title: 'Error',
-          description: error.message || 'Failed to load agent',
-          variant: 'destructive',
-        });
-        router.push('/agents');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (agentId) {
-      fetchAgent();
+    if (params.id) {
+      fetchAgent()
+      fetchReviews()
     }
-  }, [agentId, router, toast, form]);
+  }, [params.id])
 
-  const handleSave = async (data: AgentEditForm) => {
-    if (!connectedWallet) {
-      toast({
-        title: 'Wallet Not Connected',
-        description: 'Please connect your wallet',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setIsSaving(true);
+  const fetchAgent = async () => {
     try {
-      const response = await fetch(`/api/agents/${agentId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...data,
-          ownerWalletAddress: connectedWallet,
-        }),
-      });
+      const response = await fetch(`/api/agent-store?userId=test-user-${params.id}`)
+      const data = await response.json()
 
-      const result = await response.json();
-
-      if (result.success) {
-        setAgent({ ...agent!, ...result.data });
-        toast({
-          title: 'Saved',
-          description: 'Agent configuration updated',
-        });
-      } else {
-        throw new Error(result.error || 'Failed to update agent');
+      if (data.success && data.data.length > 0) {
+        const agentData = data.data[0]
+        setAgent(agentData.agent)
+        setIsInstalled(agentData.isInstalled)
       }
-    } catch (error: any) {
-      console.error('Failed to save agent:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to save changes',
-        variant: 'destructive',
-      });
+    } catch (error) {
+      console.error('Error fetching agent:', error)
     } finally {
-      setIsSaving(false);
+      setLoading(false)
     }
-  };
+  }
 
-  const handleRegenerateToken = async () => {
-    if (!confirm('This will invalidate the current API token. Continue?')) {
-      return;
-    }
-
-    setIsRegeneratingToken(true);
+  const fetchReviews = async () => {
     try {
-      const response = await fetch(`/api/agents/${agentId}`, {
+      const response = await fetch(`/api/agent-store/reviews?agentId=${params.id}`)
+      const data = await response.json()
+
+      if (data.success) {
+        setReviews(data.data)
+      }
+    } catch (error) {
+      console.error('Error fetching reviews:', error)
+    }
+  }
+
+  const handleInstall = async () => {
+    try {
+      const response = await fetch('/api/agent-store/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ownerWalletAddress: connectedWallet,
+          agentId: params.id,
+          userId: 'test-user',
         }),
-      });
+      })
 
-      const result = await response.json();
+      const data = await response.json()
 
-      if (result.success) {
-        setNewApiToken(result.data.apiToken);
-        toast({
-          title: 'Token Regenerated',
-          description: 'Save the new token securely',
-        });
-      } else {
-        throw new Error(result.error || 'Failed to regenerate token');
+      if (data.success) {
+        setIsInstalled(true)
+        alert('Agent installed successfully!')
       }
-    } catch (error: any) {
-      console.error('Failed to regenerate token:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to regenerate token',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsRegeneratingToken(false);
+    } catch (error) {
+      console.error('Error installing agent:', error)
     }
-  };
+  }
 
-  const handleDeactivate = async () => {
-    if (!confirm('This will deactivate the agent. Continue?')) {
-      return;
+  const handleUninstall = async () => {
+    if (!confirm('Are you sure you want to uninstall this agent?')) {
+      return
     }
 
     try {
-      const response = await fetch(
-        `/api/agents/${agentId}?ownerWalletAddress=${connectedWallet}`,
-        { method: 'DELETE' }
-      );
+      const response = await fetch(`/api/agent-store/installed/${params.id}?userId=test-user`, {
+        method: 'DELETE',
+      })
 
-      const result = await response.json();
+      const data = await response.json()
 
-      if (result.success) {
-        toast({
-          title: 'Agent Deactivated',
-          description: 'The agent has been deactivated',
-        });
-        router.push('/agents');
-      } else {
-        throw new Error(result.error || 'Failed to deactivate agent');
+      if (data.success) {
+        setIsInstalled(false)
+        alert('Agent uninstalled successfully!')
       }
-    } catch (error: any) {
-      console.error('Failed to deactivate agent:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to deactivate agent',
-        variant: 'destructive',
-      });
+    } catch (error) {
+      console.error('Error uninstalling agent:', error)
     }
-  };
+  }
 
-  const copyToken = (token: string) => {
-    navigator.clipboard.writeText(token);
-    setCopiedToken(true);
-    setTimeout(() => setCopiedToken(false), 2000);
-  };
+  const handleSubmitReview = async () => {
+    if (newRating === 0) {
+      alert('Please select a rating')
+      return
+    }
 
-  if (isLoading) {
+    setSubmittingReview(true)
+
+    try {
+      const response = await fetch('/api/agent-store/reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: params.id,
+          userId: 'test-user',
+          userName: 'Test User',
+          rating: newRating,
+          comment: newComment,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        setNewRating(0)
+        setNewComment('')
+        fetchReviews()
+        alert('Review submitted successfully!')
+      }
+    } catch (error) {
+      console.error('Error submitting review:', error)
+    } finally {
+      setSubmittingReview(false)
+    }
+  }
+
+  if (loading) {
     return (
-      <div className="min-h-screen bg-background">
-        <ClientNavbar />
-        <main className="container px-4 py-8">
-          <Skeleton className="h-8 w-32 mb-6" />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Skeleton className="h-64 lg:col-span-2" />
-            <Skeleton className="h-64" />
-          </div>
-        </main>
+      <div className="container mx-auto px-4 py-8">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+        <p className="mt-4 text-gray-600">Loading agent...</p>
       </div>
-    );
+    )
   }
 
   if (!agent) {
     return (
-      <div className="min-h-screen bg-background">
-        <ClientNavbar />
-        <main className="container px-4 py-8">
-          <div className="text-center py-12">
-            <AlertCircle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h2 className="text-xl font-semibold mb-2">Agent Not Found</h2>
-            <Button onClick={() => router.push('/agents')}>Back to Agents</Button>
-          </div>
-        </main>
+      <div className="container mx-auto px-4 py-8">
+        <p className="text-gray-600">Agent not found</p>
       </div>
-    );
+    )
   }
 
-  const statusConf = statusConfig[agent.status];
+  const averageRating =
+    reviews.length > 0
+      ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
+      : 0
 
   return (
-    <div className="min-h-screen bg-background">
-      <ClientNavbar />
-      <main className="container px-4 py-8">
-        <Button variant="ghost" className="mb-6" onClick={() => router.push('/agents')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Agents
-        </Button>
+    <div className="container mx-auto px-4 py-8">
+      <button
+        onClick={() => router.back()}
+        className="mb-4 text-blue-600 hover:text-blue-800"
+      >
+        ← Back to Agents
+      </button>
 
-        <div className="flex items-start justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center">
-              <Bot className="h-7 w-7 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">{agent.name}</h1>
-              <div className="flex items-center gap-3 mt-1">
-                <Badge className={`${statusConf.bgColor} ${statusConf.color}`}>
-                  {statusConf.label}
-                </Badge>
-                {agent.isOnline ? (
-                  <span className="flex items-center gap-1 text-sm text-green-600">
-                    <Wifi className="h-3 w-3" /> Online
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-sm text-gray-400">
-                    <WifiOff className="h-3 w-3" /> Offline
-                  </span>
-                )}
-              </div>
+      <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">{agent.name}</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-yellow-500">★</span>
+              <span className="font-semibold">{averageRating.toFixed(1)}</span>
+              <span className="text-gray-500">({reviews.length} reviews)</span>
+              {agent.verified && (
+                <span className="ml-2 px-2 py-1 bg-green-100 text-green-800 text-sm rounded">
+                  Verified
+                </span>
+              )}
+              <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-800 text-sm rounded">
+                {agent.source}
+              </span>
             </div>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                form.setValue('status', form.getValues('status') === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
-                form.handleSubmit(handleSave)();
-              }}
-            >
-              {form.watch('status') === 'ACTIVE' ? (
-                <>
-                  <Pause className="h-4 w-4 mr-1" /> Pause
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4 mr-1" /> Resume
-                </>
-              )}
-            </Button>
+            {!isInstalled ? (
+              <button
+                onClick={handleInstall}
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Install Agent
+              </button>
+            ) : (
+              <button
+                onClick={handleUninstall}
+                className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                Uninstall
+              </button>
+            )}
           </div>
         </div>
 
-        <Tabs defaultValue="settings" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="settings">
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
-            </TabsTrigger>
-            <TabsTrigger value="logs">
-              <Activity className="h-4 w-4 mr-2" />
-              Logs
-            </TabsTrigger>
-            <TabsTrigger value="stats">
-              <Coins className="h-4 w-4 mr-2" />
-              Statistics
-            </TabsTrigger>
-          </TabsList>
+        <p className="text-gray-600 mb-6">{agent.description}</p>
 
-          <TabsContent value="settings">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <Form {...form}>
-                  <form onSubmit={form.handleSubmit(handleSave)} className="space-y-6">
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Agent Configuration</CardTitle>
-                        <CardDescription>Update your agent&apos;s settings</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <FormField
-                          control={form.control}
-                          name="name"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Name</FormLabel>
-                              <FormControl>
-                                <Input {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-3">Capabilities</h2>
+          <div className="flex flex-wrap gap-2">
+            {agent.capabilities.map((cap) => (
+              <span
+                key={cap}
+                className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg"
+              >
+                {cap}
+              </span>
+            ))}
+          </div>
+        </div>
 
-                        <FormField
-                          control={form.control}
-                          name="description"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Description</FormLabel>
-                              <FormControl>
-                                <Textarea className="min-h-[80px]" {...field} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-
-                        <FormField
-                          control={form.control}
-                          name="execUrl"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Webhook URL</FormLabel>
-                              <FormControl>
-                                <Input type="url" placeholder="https://" {...field} />
-                              </FormControl>
-                              <FormDescription>
-                                URL where your agent receives task notifications
-                              </FormDescription>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </CardContent>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Matching Criteria</CardTitle>
-                        <CardDescription>Configure which tasks your agent should consider</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <FormField
-                            control={form.control}
-                            name="criteria.minReward"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>Min Reward</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    {...field}
-                                    onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                                  />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-                          <FormField
-                            control={form.control}
-                            name="criteria.maxReward"
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>Max Reward</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    {...field}
-                                    onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                                  />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-
-                        <FormField
-                          control={form.control}
-                          name="criteria.requireEscrow"
-                          render={({ field }) => (
-                            <FormItem className="flex items-center justify-between rounded-lg border p-4">
-                              <div>
-                                <FormLabel>Require Escrow</FormLabel>
-                                <FormDescription>
-                                  Only match tasks with escrow deposited
-                                </FormDescription>
-                              </div>
-                              <FormControl>
-                                <Switch checked={field.value} onCheckedChange={field.onChange} />
-                              </FormControl>
-                            </FormItem>
-                          )}
-                        />
-
-                        <div className="flex justify-end gap-3 pt-4">
-                          <Button type="submit" disabled={isSaving}>
-                            {isSaving ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Saving...
-                              </>
-                            ) : (
-                              'Save Changes'
-                            )}
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </form>
-                </Form>
-              </div>
-
-              {/* Sidebar */}
-              <div className="space-y-6">
-                {/* Agent Info */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Agent Info</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">ID:</span>
-                      <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">{agent.id}</code>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Wallet:</span>
-                      <code className="ml-2 text-xs bg-muted px-2 py-1 rounded">
-                        {agent.walletAddress.slice(0, 8)}...{agent.walletAddress.slice(-6)}
-                      </code>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Created:</span>
-                      <span className="ml-2">
-                        {formatDistanceToNow(new Date(agent.createdAt), { addSuffix: true })}
-                      </span>
-                    </div>
-                    {agent.lastSeen && (
-                      <div>
-                        <span className="text-muted-foreground">Last Seen:</span>
-                        <span className="ml-2">
-                          {formatDistanceToNow(new Date(agent.lastSeen), { addSuffix: true })}
-                        </span>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* API Token */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Key className="h-4 w-4" />
-                      API Token
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {newApiToken ? (
-                      <div className="space-y-2">
-                        <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-900 rounded p-2 text-xs text-amber-700 dark:text-amber-300">
-                          New token generated! Save it securely.
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <code className="flex-1 text-xs bg-muted p-2 rounded break-all">
-                            {newApiToken}
-                          </code>
-                          <Button variant="outline" size="icon" onClick={() => copyToken(newApiToken)}>
-                            {copiedToken ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-sm text-muted-foreground">
-                        Token is hidden for security. Regenerate to get a new token.
-                      </div>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={handleRegenerateToken}
-                      disabled={isRegeneratingToken}
-                    >
-                      {isRegeneratingToken ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                      )}
-                      Regenerate Token
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                {/* Danger Zone */}
-                <Card className="border-destructive/50">
-                  <CardHeader>
-                    <CardTitle className="text-base text-destructive">Danger Zone</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="w-full"
-                      onClick={handleDeactivate}
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Deactivate Agent
-                    </Button>
-                  </CardContent>
-                </Card>
-              </div>
+        {agent.protocols.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-3">Protocols</h2>
+            <div className="flex flex-wrap gap-2">
+              {agent.protocols.map((protocol) => (
+                <span
+                  key={protocol}
+                  className="px-3 py-1 bg-gray-100 text-gray-800 rounded-lg"
+                >
+                  {protocol}
+                </span>
+              ))}
             </div>
-          </TabsContent>
+          </div>
+        )}
 
-          <TabsContent value="logs">
-            <Card>
-              <CardHeader>
-                <CardTitle>Activity Log</CardTitle>
-                <CardDescription>Recent activity and events for this agent</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {agent.logs && agent.logs.length > 0 ? (
-                  <div className="space-y-2">
-                    {agent.logs.map((log: any) => (
-                      <div
-                        key={log.id}
-                        className="flex items-start gap-3 p-3 rounded-lg bg-muted/50"
-                      >
-                        <div
-                          className={`h-2 w-2 rounded-full mt-2 ${
-                            log.level === 'ERROR'
-                              ? 'bg-red-500'
-                              : log.level === 'WARN'
-                              ? 'bg-yellow-500'
-                              : 'bg-green-500'
-                          }`}
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm">{log.action}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatDistanceToNow(new Date(log.createdAt), { addSuffix: true })}
-                            </span>
-                          </div>
-                          <p className="text-sm text-muted-foreground mt-1">{log.message}</p>
-                        </div>
-                      </div>
-                    ))}
+        {agent.dispatchEndpoint && (
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold mb-3">Dispatch Endpoint</h2>
+            <p className="text-gray-600 font-mono text-sm break-all">
+              {agent.dispatchEndpoint}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h2 className="text-2xl font-semibold mb-6">Reviews</h2>
+
+        {reviews.length === 0 ? (
+          <p className="text-gray-600">No reviews yet. Be the first to review!</p>
+        ) : (
+          <div className="space-y-4">
+            {reviews.map((review) => (
+              <div key={review.id} className="border-b pb-4">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <p className="font-semibold">{review.userName}</p>
+                    <div className="flex items-center gap-1">
+                      <span className="text-yellow-500">★</span>
+                      <span className="font-semibold">{review.rating}</span>
+                    </div>
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No logs available yet
-                  </div>
+                  <span className="text-sm text-gray-500">
+                    {new Date(review.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
+                {review.comment && (
+                  <p className="text-gray-600">{review.comment}</p>
                 )}
-              </CardContent>
-            </Card>
-          </TabsContent>
+              </div>
+            ))}
+          </div>
+        )}
 
-          <TabsContent value="stats">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-2xl">{agent.totalDispatches || 0}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <CardDescription>Total Tasks Received</CardDescription>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-2xl">{agent.totalBids || 0}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <CardDescription>Bids Submitted</CardDescription>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-2xl">{agent.acceptedBids || 0}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <CardDescription>Bids Accepted</CardDescription>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-        </Tabs>
-      </main>
+        <div className="mt-8 pt-6 border-t">
+          <h3 className="text-xl font-semibold mb-4">Write a Review</h3>
+          <div className="flex gap-2 mb-4">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => setNewRating(star)}
+                className={`text-2xl ${
+                  star <= newRating ? 'text-yellow-500' : 'text-gray-300'
+                }`}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={newComment}
+            onChange={(e) => setNewComment(e.target.value)}
+            placeholder="Share your experience with this agent..."
+            className="w-full px-4 py-2 border rounded-lg mb-4"
+            rows={4}
+          />
+          <button
+            onClick={handleSubmitReview}
+            disabled={submittingReview}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
+          >
+            {submittingReview ? 'Submitting...' : 'Submit Review'}
+          </button>
+        </div>
+      </div>
     </div>
-  );
+  )
 }

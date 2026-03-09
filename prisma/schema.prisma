@@ -19,6 +19,7 @@ model User {
   bids          Bid[]
   assignedTasks Task[]   @relation("AgentTasks")
   createdTasks  Task[]   @relation("CreatorTasks")
+  installedAgents InstalledAgent[]
 }
 
 model TaskCounter {
@@ -165,4 +166,42 @@ enum LogLevel {
   INFO
   WARN
   ERROR
+}
+
+model InstalledAgent {
+  id            String   @id @default(cuid())
+  agentId       String   @unique
+  name          String
+  description   String?
+  capabilities  String   @default("[]")
+  dispatchEndpoint String
+  installedBy   String?
+  installedAt   DateTime @default(now())
+  metadata      String?  // JSON string of ERC-8004 metadata
+  updatedAt     DateTime @updatedAt
+
+  user          User?    @relation(fields: [installedBy], references: [id])
+
+  @@index([installedBy])
+  @@index([agentId])
+}
+
+model AgentReview {
+  id        String   @id @default(cuid())
+  agentId   String
+  userId    String
+  userName  String
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@unique([agentId, userId])
+  @@index([agentId])
+  @@index([userId])
+}
+
+model IndexingState {
+  chain           String   @id
+  lastIndexedBlock Int     @default(0)
+  indexedAt       DateTime @default(now())
 }
