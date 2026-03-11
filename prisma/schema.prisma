@@ -32,11 +32,13 @@ model Task {
   numericId       Int             @unique
   title           String
   description     String
+  requirements    String?         // JSON string of task requirements
+  inputSchema     String?         // JSON schema for task input
   reward          Float
   tokenSymbol     String          @default("TT")
   tokenAddress    String?
   escrowAddress   String?
-  status          TaskStatus      @default(OPEN)
+  status          TaskStatus      @default(CREATED)
   creatorId       String
   agentId         String?
   onChainId       Int?
@@ -44,12 +46,18 @@ model Task {
   txHash          String?
   resultHash      String?
   deadline        DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
-  dispatches      AgentDispatch[]
+  dispatches       AgentDispatch[]
   bids            Bid[]
   agent           User?           @relation("AgentTasks", fields: [agentId], references: [id])
   creator         User            @relation("CreatorTasks", fields: [creatorId], references: [id])
+  
+  // Lifecycle relations
+  escrow           Escrow?
+  workSubmission   WorkSubmission?
 }
 
 model Bid {
@@ -78,20 +86,39 @@ model Agent {
   execUrl         String?
   apiTokenHash    String?
   status          AgentStatus     @default(ACTIVE)
+  
+  // ERC-8004 Integration
+  erc8004AgentId  String?         // eip155:chainId:tokenId format
+  metadataUri     String?         // IPFS URI for agent metadata
+  
+  // Capabilities
+  capabilities    String          @default("[]")      // JSON array of capabilities
+  endpoints       String          @default("[]")      // JSON array of service endpoints
+  
+  // Reputation (cached from on-chain)
+  reputationScore Float           @default(0)
+  totalTasks      Int              @default(0)
+  completedTasks  Int              @default(0)
+  averageRating   Float            @default(0)
+  
+  // Timestamps
   lastSeen        DateTime?
   lastError       String?
-  totalDispatches Int             @default(0)
-  totalBids       Int             @default(0)
-  acceptedBids    Int             @default(0)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  totalDispatches Int              @default(0)
+  totalBids       Int              @default(0)
+  acceptedBids    Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  
   owner           User            @relation(fields: [ownerId], references: [id])
   dispatches      AgentDispatch[]
   logs            AgentLog[]
   bids            Bid[]
+  workSubmissions WorkSubmission[]
 
   @@index([ownerId])
   @@index([status])
+  @@index([erc8004AgentId])
 }
 
 model AgentDispatch {
@@ -130,11 +157,16 @@ model AgentLog {
 }
 
 enum TaskStatus {
+  CREATED
   OPEN
+  BIDDING
+  ASSIGNED
   IN_PROGRESS
-  COMPLETED
+  SUBMITTED
+  VALIDATING
+  COMPLETE
+  FAILED
   DISPUTED
-  CLOSED
   CANCELLED
 }
 
@@ -200,8 +232,155 @@ model AgentReview {
   @@index([userId])
 }
 
-model IndexingState {
-  chain           String   @id
-  lastIndexedBlock Int     @default(0)
-  indexedAt       DateTime @default(now())
+// NOTE: IndexingState table removed
+// Agent data now comes from ChaosChain facilitator (ERC-8004 registry)
+// No more manual blockchain indexing required
+
+// ============== ESCROW MODELS ==============
+
+model Escrow {
+  id            String        @id @default(cuid())
+  taskId        String        @unique
+  payer         String        // wallet address of task creator
+  agentWallet   String        // wallet address of agent
+  amount        Float
+  token         String        @default("USDC")
+  tokenAddress  String?
+  status        EscrowStatus  @default(PENDING)
+  releaseCondition ReleaseCondition @default(VALIDATION_PASSED)
+  txHash        String?
+  releasedAt    DateTime?
+  refundedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  task          Task          @relation(fields: [taskId], references: [id])
+}
+
+enum EscrowStatus {
+  PENDING
+  LOCKED
+  RELEASED
+  REFUNDED
+  DISPUTED
+}
+
+enum ReleaseCondition {
+  VALIDATION_PASSED
+  MANUAL_RELEASE
+  TIMEOUT
+}
+
+// ============== WORK SUBMISSION MODELS ==============
+
+model WorkSubmission {
+  id            String           @id @default(cuid())
+  taskId        String           @unique
+  agentId       String
+  resultUri     String?          // IPFS URI or storage URL for result
+  evidenceUri   String?          // IPFS URI for evidence files
+  dataHash      String?           // SHA256 hash of submitted data
+  threadRoot    String?          // ChaosChain thread root
+  evidenceRoot  String?          // ChaosChain evidence root
+  status        SubmissionStatus @default(PENDING)
+  submittedAt   DateTime         @default(now())
+  validatedAt   DateTime?
+  task          Task             @relation(fields: [taskId], references: [id])
+  agent         Agent            @relation(fields: [agentId], references: [id])
+  validation    Validation?
+
+  @@index([agentId])
+}
+
+enum SubmissionStatus {
+  PENDING
+  VALIDATING
+  APPROVED
+  REJECTED
+  DISPUTED
+}
+
+// ============== VALIDATION MODELS ==============
+
+model Validation {
+  id                String           @id @default(cuid())
+  workSubmissionId  String           @unique
+  validatorAgentId  String?
+  validatorWallet  String?
+  score             Int              // 0-100
+  comments          String?
+  evidence          String?          // JSON string of validation evidence
+  status            ValidationStatus @default(PENDING)
+  requestedAt       DateTime         @default(now())
+  completedAt       DateTime?
+  workSubmission    WorkSubmission   @relation(fields: [workSubmissionId], references: [id])
+}
+
+enum ValidationStatus {
+  PENDING
+  IN_PROGRESS
+  PASSED
+  FAILED
+  DISPUTED
+}
+
+// ============== REPUTATION MODELS ==============
+
+model ReputationRecord {
+  id            String   @id @default(cuid())
+  agentId       String
+  taskId        String?
+  raterId       String   // User who gave feedback
+  score         Int      // 1-5
+  tag1          String?  // e.g., "reasoning", "efficiency"
+  tag2          String?  // e.g., "compliance", "collaboration"
+  comment       String?
+  fileUri       String?  // Optional file evidence
+  fileHash      String?  // SHA256 of file
+  txHash        String?  // On-chain transaction hash
+  createdAt     DateTime @default(now())
+  
+  @@index([agentId])
+  @@index([taskId])
+}
+
+// ============== NOTIFICATION MODELS ==============
+
+model Notification {
+  id          String           @id @default(cuid())
+  type        NotificationType
+  recipientId String           // User ID or agent ID
+  channel     Channel          @default(WEBHOOK)
+  payload     String           // JSON payload
+  status      NotificationStatus @default(PENDING)
+  sentAt      DateTime?
+  failedAt    DateTime?
+  error       String?
+  retries     Int             @default(0)
+  createdAt   DateTime         @default(now())
+}
+
+enum NotificationType {
+  TASK_CREATED
+  TASK_ASSIGNED
+  TASK_COMPLETED
+  TASK_FAILED
+  BID_SUBMITTED
+  BID_ACCEPTED
+  BID_REJECTED
+  WORK_SUBMITTED
+  VALIDATION_COMPLETED
+  ESCROW_RELEASED
+  ESCROW_REFUNDED
+}
+
+enum Channel {
+  WEBHOOK
+  WEBSOCKET
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
 }

@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { hashApiToken, generateApiToken } from '@/lib/agent-crypto';
+import { chaosChainService, parseAgentId } from '@/lib/chaoschain-service';
+
+/**
+ * Check if agent ID is an ERC-8004 format (eip155:chainId:tokenId)
+ */
+function isERC8004Agent(id: string): boolean {
+  return /^eip155:\d+:\d+$/.test(id);
+}
 
 /**
  * GET /api/agents/:id
- * Get agent details
+ * Get agent details - supports both local and ERC-8004 agents
  */
 export async function GET(
   request: NextRequest,
@@ -13,6 +21,38 @@ export async function GET(
   try {
     const { id } = await params;
 
+    // Check if this is an ERC-8004 agent
+    if (isERC8004Agent(id)) {
+      const { chainId, tokenId } = parseAgentId(id);
+      
+      // Get agent from ChaosChain
+      const agent = await chaosChainService.getAgent(id);
+      
+      if (!agent) {
+        return NextResponse.json(
+          { success: false, error: 'Agent not found' },
+          { status: 404 }
+        );
+      }
+
+      // Get on-chain reputation
+      const reputation = await chaosChainService.getReputation(id);
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          ...agent,
+          reputation: reputation ? {
+            totalRatings: reputation.totalRatings,
+            averageRating: reputation.averageRating,
+            ratings: reputation.ratings,
+          } : null,
+          source: 'erc8004',
+        },
+      });
+    }
+
+    // Local agent from database
     const agent = await db.agent.findUnique({
       where: { id },
       include: {
@@ -61,6 +101,7 @@ export async function GET(
         criteria: JSON.parse(agent.criteria || '{}'),
         isOnline: agent.lastSeen &&
           (Date.now() - new Date(agent.lastSeen).getTime()) < 5 * 60 * 1000,
+        source: 'local',
       },
     });
   } catch (error) {

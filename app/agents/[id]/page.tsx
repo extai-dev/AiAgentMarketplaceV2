@@ -2,27 +2,51 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { Skeleton } from '@/components/ui/skeleton'
 
 interface Agent {
   id: string
+  chainId?: string
+  tokenId?: string
   name: string
   description: string
   capabilities: string[]
   protocols: string[]
-  dispatchEndpoint: string
+  dispatchEndpoint?: string
   source: 'local' | 'erc8004' | 'installed'
   installedBy?: string
   installedAt?: string
   verified: boolean
   metadata?: any
+  owner?: string
 }
 
 interface Review {
   id: string
-  userName: string
+  user: string
   rating: number
   comment: string
   createdAt: string
+}
+
+/**
+ * Parse agent ID to extract chainId and tokenId
+ * Format: eip155:{chainId}:{tokenId} or plain number
+ */
+function parseAgentId(id: string): { chainId: string; tokenId: string } | null {
+  // Try to match eip155 format: eip155:1:123
+  const match = id.match(/^eip155:(\d+):(\d+)$/)
+  if (match) {
+    return { chainId: match[1], tokenId: match[2] }
+  }
+  
+  // Try as plain number (backward compatibility)
+  const num = parseInt(id)
+  if (!isNaN(num)) {
+    return { chainId: '1', tokenId: id } // Default to chain 1
+  }
+  
+  return null
 }
 
 export default function AgentDetailPage() {
@@ -31,6 +55,7 @@ export default function AgentDetailPage() {
   const [agent, setAgent] = useState<Agent | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [newRating, setNewRating] = useState(0)
   const [newComment, setNewComment] = useState('')
@@ -44,32 +69,111 @@ export default function AgentDetailPage() {
   }, [params.id])
 
   const fetchAgent = async () => {
+    setLoading(true)
+    setError(null)
+    
     try {
-      const response = await fetch(`/api/agent-store?userId=test-user-${params.id}`)
+      const agentId = params.id as string
+      const parsed = parseAgentId(agentId)
+      
+      if (parsed) {
+        // Fetch from 8004scan API
+        const response = await fetch(`/api/8004scan/agents/${parsed.chainId}/${parsed.tokenId}`)
+        const data = await response.json()
+        
+        if (data.success && data.data) {
+          const agentData = data.data
+          setAgent({
+            id: agentId,
+            chainId: agentData.chainId,
+            tokenId: agentData.tokenId,
+            name: agentData.name || 'Unnamed Agent',
+            description: agentData.description || agentData.metadata?.description || '',
+            capabilities: agentData.capabilities || agentData.metadata?.capabilities || [],
+            protocols: agentData.protocols || agentData.metadata?.protocols || [],
+            dispatchEndpoint: agentData.uri,
+            source: 'erc8004',
+            verified: agentData.verified || false,
+            metadata: agentData.metadata,
+            owner: agentData.owner,
+          })
+        } else {
+          // Try fallback to agent-store
+          await fetchAgentFallback(agentId)
+        }
+      } else {
+        // Invalid ID format, try fallback
+        await fetchAgentFallback(agentId)
+      }
+    } catch (err) {
+      console.error('Error fetching agent:', err)
+      // Try fallback
+      const fallbackId = params.id as string
+      await fetchAgentFallback(fallbackId)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchAgentFallback = async (agentId: string) => {
+    try {
+      const response = await fetch(`/api/agent-store?userId=test-user-${agentId}`)
       const data = await response.json()
 
       if (data.success && data.data.length > 0) {
         const agentData = data.data[0]
         setAgent(agentData.agent)
         setIsInstalled(agentData.isInstalled)
+      } else {
+        setError('Agent not found')
       }
-    } catch (error) {
-      console.error('Error fetching agent:', error)
-    } finally {
-      setLoading(false)
+    } catch (err) {
+      console.error('Error fetching agent from fallback:', err)
+      setError('Failed to load agent')
     }
   }
 
   const fetchReviews = async () => {
+    const agentId = params.id as string
     try {
-      const response = await fetch(`/api/agent-store/reviews?agentId=${params.id}`)
+      const parsed = parseAgentId(agentId)
+      
+      if (parsed) {
+        // Fetch from 8004scan feedbacks API
+        const response = await fetch(`/api/8004scan/feedbacks?chainId=${parsed.chainId}&tokenId=${parsed.tokenId}`)
+        const data = await response.json()
+        
+        if (data.success && data.data) {
+          const feedbacks = data.data.map((fb: any) => ({
+            id: fb.id,
+            user: fb.user || 'Anonymous',
+            rating: fb.rating,
+            comment: fb.comment,
+            createdAt: fb.createdAt,
+          }))
+          setReviews(feedbacks)
+          return
+        }
+      }
+      
+      // Fallback to agent-store reviews
+      await fetchReviewsFallback(agentId)
+    } catch (err) {
+      console.error('Error fetching reviews:', err)
+      await fetchReviewsFallback(agentId)
+    }
+  }
+
+  const fetchReviewsFallback = async (agentId: string) => {
+    try {
+      const response = await fetch(`/api/agent-store/reviews?agentId=${agentId}`)
       const data = await response.json()
 
       if (data.success) {
         setReviews(data.data)
       }
-    } catch (error) {
-      console.error('Error fetching reviews:', error)
+    } catch (err) {
+      console.error('Error fetching reviews from fallback:', err)
     }
   }
 
@@ -152,19 +256,48 @@ export default function AgentDetailPage() {
     }
   }
 
+  // Loading state with skeletons
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-8">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-        <p className="mt-4 text-gray-600">Loading agent...</p>
+        <button
+          onClick={() => router.back()}
+          className="mb-4 text-blue-600 hover:text-blue-800"
+        >
+          ← Back to Agents
+        </button>
+        
+        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+          <Skeleton className="h-10 w-1/2 mb-4" />
+          <Skeleton className="h-6 w-1/3 mb-6" />
+          <Skeleton className="h-4 w-full mb-2" />
+          <Skeleton className="h-4 w-3/4 mb-6" />
+          <Skeleton className="h-6 w-full mb-4" />
+          <div className="flex gap-2">
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+        </div>
       </div>
     )
   }
 
-  if (!agent) {
+  if (error || !agent) {
     return (
       <div className="container mx-auto px-4 py-8">
-        <p className="text-gray-600">Agent not found</p>
+        <button
+          onClick={() => router.back()}
+          className="mb-4 text-blue-600 hover:text-blue-800"
+        >
+          ← Back to Agents
+        </button>
+        
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <p className="text-gray-600 text-lg">
+            {error || 'Agent not found'}
+          </p>
+        </div>
       </div>
     )
   }
@@ -187,7 +320,7 @@ export default function AgentDetailPage() {
         <div className="flex justify-between items-start mb-4">
           <div>
             <h1 className="text-3xl font-bold mb-2">{agent.name}</h1>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-yellow-500">★</span>
               <span className="font-semibold">{averageRating.toFixed(1)}</span>
               <span className="text-gray-500">({reviews.length} reviews)</span>
@@ -200,6 +333,20 @@ export default function AgentDetailPage() {
                 {agent.source}
               </span>
             </div>
+            
+            {/* Chain and Token ID info */}
+            {agent.chainId && agent.tokenId && (
+              <div className="mt-2 text-sm text-gray-500">
+                Chain ID: {agent.chainId} | Token ID: {agent.tokenId}
+              </div>
+            )}
+            
+            {/* Owner info */}
+            {agent.owner && (
+              <div className="mt-1 text-sm text-gray-500">
+                Owner: <span className="font-mono">{agent.owner.slice(0, 6)}...{agent.owner.slice(-4)}</span>
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             {!isInstalled ? (
@@ -225,14 +372,18 @@ export default function AgentDetailPage() {
         <div className="mb-6">
           <h2 className="text-xl font-semibold mb-3">Capabilities</h2>
           <div className="flex flex-wrap gap-2">
-            {agent.capabilities.map((cap) => (
-              <span
-                key={cap}
-                className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg"
-              >
-                {cap}
-              </span>
-            ))}
+            {agent.capabilities.length > 0 ? (
+              agent.capabilities.map((cap) => (
+                <span
+                  key={cap}
+                  className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg"
+                >
+                  {cap}
+                </span>
+              ))
+            ) : (
+              <span className="text-gray-500">No capabilities specified</span>
+            )}
           </div>
         </div>
 
@@ -271,16 +422,16 @@ export default function AgentDetailPage() {
           <div className="space-y-4">
             {reviews.map((review) => (
               <div key={review.id} className="border-b pb-4">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <p className="font-semibold">{review.userName}</p>
+                <div className="flex justify-between2">
+                   items-start mb-<div>
+                    <p className="font-semibold">{review.user}</p>
                     <div className="flex items-center gap-1">
                       <span className="text-yellow-500">★</span>
                       <span className="font-semibold">{review.rating}</span>
                     </div>
                   </div>
                   <span className="text-sm text-gray-500">
-                    {new Date(review.createdAt).toLocaleDateString()}
+                    {review.createdAt ? new Date(review.createdAt).toLocaleDateString() : 'Unknown'}
                   </span>
                 </div>
                 {review.comment && (

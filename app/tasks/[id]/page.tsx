@@ -1,25 +1,41 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useReadContract } from 'wagmi';
-import { polygonAmoy } from 'wagmi/chains';
-import { parseEther, type Address } from 'viem';
-import { ClientNavbar } from '@/components/marketplace/ClientNavbar';
-import { BidList } from '@/components/marketplace/BidList';
-import { BidForm } from '@/components/marketplace/BidForm';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { useStore, Task, Bid, TaskStatusType } from '@/store/useStore';
-import { isValidAddress } from '@/hooks/useTaskContract';
-import { SIMPLE_ESCROW_ABI } from '@/lib/contracts/SimpleEscrow';
-import { ERC20_ABI, SIMPLE_ESCROW_ADDRESS, TASK_TOKEN_ADDRESS } from '@/lib/contracts/addresses';
-import { formatDistanceToNow, format } from 'date-fns';
-import { useToast } from '@/hooks/use-toast';
+import { useEffect, useState, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
+import {
+  useAccount,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+  useSwitchChain,
+  useReadContract,
+} from "wagmi";
+import { polygonAmoy } from "wagmi/chains";
+import { parseEther, type Address } from "viem";
+import { ClientNavbar } from "@/components/marketplace/ClientNavbar";
+import { BidList } from "@/components/marketplace/BidList";
+import { BidForm } from "@/components/marketplace/BidForm";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useStore, Task, Bid, TaskStatusType } from "@/store/useStore";
+import { isValidAddress } from "@/hooks/useTaskContract";
+import { SIMPLE_ESCROW_ABI } from "@/lib/contracts/SimpleEscrow";
+import {
+  ERC20_ABI,
+  SIMPLE_ESCROW_ADDRESS,
+  TASK_TOKEN_ADDRESS,
+} from "@/lib/contracts/addresses";
+import { formatDistanceToNow, format } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft,
   Clock,
@@ -32,16 +48,43 @@ import {
   FileText,
   Copy,
   Check,
-  Shield
-} from 'lucide-react';
+  Shield,
+} from "lucide-react";
 
-const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
-  OPEN: { label: 'Open for Bids', color: 'bg-blue-500', icon: <Clock className="h-4 w-4" /> },
-  IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500', icon: <Loader2 className="h-4 w-4" /> },
-  COMPLETED: { label: 'Completed', color: 'bg-green-500', icon: <CheckCircle2 className="h-4 w-4" /> },
-  DISPUTED: { label: 'Disputed', color: 'bg-red-500', icon: <AlertCircle className="h-4 w-4" /> },
-  CLOSED: { label: 'Closed', color: 'bg-gray-500', icon: <CheckCircle2 className="h-4 w-4" /> },
-  CANCELLED: { label: 'Cancelled', color: 'bg-gray-400', icon: <XCircle className="h-4 w-4" /> },
+const statusConfig: Record<
+  TaskStatusType,
+  { label: string; color: string; icon: React.ReactNode }
+> = {
+  OPEN: {
+    label: "Open for Bids",
+    color: "bg-blue-500",
+    icon: <Clock className="h-4 w-4" />,
+  },
+  IN_PROGRESS: {
+    label: "In Progress",
+    color: "bg-yellow-500",
+    icon: <Loader2 className="h-4 w-4" />,
+  },
+  COMPLETED: {
+    label: "Completed",
+    color: "bg-green-500",
+    icon: <CheckCircle2 className="h-4 w-4" />,
+  },
+  DISPUTED: {
+    label: "Disputed",
+    color: "bg-red-500",
+    icon: <AlertCircle className="h-4 w-4" />,
+  },
+  CLOSED: {
+    label: "Closed",
+    color: "bg-gray-500",
+    icon: <CheckCircle2 className="h-4 w-4" />,
+  },
+  CANCELLED: {
+    label: "Cancelled",
+    color: "bg-gray-400",
+    icon: <XCircle className="h-4 w-4" />,
+  },
 };
 
 export default function TaskDetailPage() {
@@ -72,7 +115,7 @@ export default function TaskDetailPage() {
   const { data: onChainEscrow, refetch: refetchEscrow } = useReadContract({
     address: escrowAddress,
     abi: SIMPLE_ESCROW_ABI,
-    functionName: 'getEscrow',
+    functionName: "getEscrow",
     args: task?.numericId ? [BigInt(task.numericId)] : undefined,
     query: {
       enabled: !!escrowAddress && !!task?.numericId && hasContracts,
@@ -80,7 +123,11 @@ export default function TaskDetailPage() {
   });
 
   // Wait for transaction confirmation
-  const { isLoading: isConfirming, isSuccess: isConfirmed, data: txReceipt } = useWaitForTransactionReceipt({
+  const {
+    isLoading: isConfirming,
+    isSuccess: isConfirmed,
+    data: txReceipt,
+  } = useWaitForTransactionReceipt({
     hash: txHash || undefined,
   });
 
@@ -96,18 +143,18 @@ export default function TaskDetailPage() {
           setBids(taskData.data.bids || []);
         } else {
           toast({
-            title: 'Error',
-            description: 'Task not found',
-            variant: 'destructive',
+            title: "Error",
+            description: "Task not found",
+            variant: "destructive",
           });
-          router.push('/');
+          router.push("/");
         }
       } catch (error) {
-        console.error('Failed to fetch task:', error);
+        console.error("Failed to fetch task:", error);
         toast({
-          title: 'Error',
-          description: 'Failed to load task',
-          variant: 'destructive',
+          title: "Error",
+          description: "Failed to load task",
+          variant: "destructive",
         });
       } finally {
         setIsLoading(false);
@@ -128,7 +175,7 @@ export default function TaskDetailPage() {
         setBids(data.data.bids || []);
       }
     } catch (error) {
-      console.error('Failed to refresh task:', error);
+      console.error("Failed to refresh task:", error);
     }
   };
 
@@ -140,10 +187,10 @@ export default function TaskDetailPage() {
       try {
         // Update database after blockchain confirmation
         const response = await fetch(`/api/tasks/${task.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            status: 'CLOSED',
+            status: "CLOSED",
             txHash,
           }),
         });
@@ -151,19 +198,21 @@ export default function TaskDetailPage() {
         const result = await response.json();
         if (result.success) {
           toast({
-            title: 'Payment Released!',
-            description: 'Tokens transferred to agent. Transaction confirmed on blockchain.',
+            title: "Payment Released!",
+            description:
+              "Tokens transferred to agent. Transaction confirmed on blockchain.",
           });
           refreshTask();
         } else {
-          throw new Error(result.error || 'Failed to update database');
+          throw new Error(result.error || "Failed to update database");
         }
       } catch (error: any) {
-        console.error('Error updating database:', error);
+        console.error("Error updating database:", error);
         toast({
-          title: 'Database Update Failed',
-          description: 'Blockchain transaction succeeded but database update failed.',
-          variant: 'destructive',
+          title: "Database Update Failed",
+          description:
+            "Blockchain transaction succeeded but database update failed.",
+          variant: "destructive",
         });
       } finally {
         setTxHash(null);
@@ -174,11 +223,15 @@ export default function TaskDetailPage() {
     handleConfirmation();
   }, [isConfirmed, txHash, isReleasing, task, toast]);
 
-  const isCreator = address?.toLowerCase() === task?.creator?.walletAddress?.toLowerCase();
-  const isAgent = address?.toLowerCase() === task?.agent?.walletAddress?.toLowerCase();
+  const isCreator =
+    address?.toLowerCase() === task?.creator?.walletAddress?.toLowerCase();
+  const isAgent =
+    address?.toLowerCase() === task?.agent?.walletAddress?.toLowerCase();
 
   // Check if escrow exists on-chain
-  const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
+  const escrowData = onChainEscrow as
+    | [bigint, Address, Address, boolean, boolean]
+    | undefined;
   const escrowAmount = escrowData ? Number(escrowData[0]) / 1e18 : 0;
   const escrowExists = escrowData ? escrowData[3] : false;
   const escrowReleased = escrowData ? escrowData[4] : false;
@@ -190,7 +243,7 @@ export default function TaskDetailPage() {
     try {
       await switchChainAsync({ chainId: polygonAmoy.id });
     } catch (error) {
-      console.error('Failed to switch network:', error);
+      console.error("Failed to switch network:", error);
     }
   };
 
@@ -201,9 +254,10 @@ export default function TaskDetailPage() {
     // Check if escrow has been deposited
     if (!hasEscrow) {
       toast({
-        title: 'Cannot Complete Task',
-        description: 'Escrow has not been deposited yet. Wait for the creator to deposit escrow.',
-        variant: 'destructive',
+        title: "Cannot Complete Task",
+        description:
+          "Escrow has not been deposited yet. Wait for the creator to deposit escrow.",
+        variant: "destructive",
       });
       return;
     }
@@ -212,10 +266,10 @@ export default function TaskDetailPage() {
 
     try {
       const response = await fetch(`/api/tasks/${task.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          status: 'COMPLETED',
+          status: "COMPLETED",
           resultHash,
         }),
       });
@@ -223,18 +277,18 @@ export default function TaskDetailPage() {
       const result = await response.json();
       if (result.success) {
         toast({
-          title: 'Task marked complete!',
-          description: 'Waiting for creator to release payment.',
+          title: "Task marked complete!",
+          description: "Waiting for creator to release payment.",
         });
         refreshTask();
       } else {
-        throw new Error(result.error || 'Failed to update task');
+        throw new Error(result.error || "Failed to update task");
       }
     } catch (error: any) {
       toast({
-        title: 'Error',
+        title: "Error",
         description: error.message,
-        variant: 'destructive',
+        variant: "destructive",
       });
     }
   };
@@ -246,9 +300,10 @@ export default function TaskDetailPage() {
     // Check if escrow exists on-chain
     if (!hasEscrow && !escrowExists) {
       toast({
-        title: 'No Escrow Deposit',
-        description: 'Escrow has not been deposited on-chain. Cannot release payment.',
-        variant: 'destructive',
+        title: "No Escrow Deposit",
+        description:
+          "Escrow has not been deposited on-chain. Cannot release payment.",
+        variant: "destructive",
       });
       return;
     }
@@ -256,9 +311,9 @@ export default function TaskDetailPage() {
     // Check if already released
     if (escrowReleased) {
       toast({
-        title: 'Already Released',
-        description: 'Payment has already been released.',
-        variant: 'destructive',
+        title: "Already Released",
+        description: "Payment has already been released.",
+        variant: "destructive",
       });
       return;
     }
@@ -267,9 +322,9 @@ export default function TaskDetailPage() {
     const agentAddress = task.agent?.walletAddress;
     if (!agentAddress) {
       toast({
-        title: 'No Agent Assigned',
-        description: 'Cannot release payment without an assigned agent.',
-        variant: 'destructive',
+        title: "No Agent Assigned",
+        description: "Cannot release payment without an assigned agent.",
+        variant: "destructive",
       });
       return;
     }
@@ -277,9 +332,10 @@ export default function TaskDetailPage() {
     // Need numeric ID for on-chain operation
     if (!task.numericId) {
       toast({
-        title: 'Task Missing Numeric ID',
-        description: 'This task does not have a numeric ID for on-chain operations.',
-        variant: 'destructive',
+        title: "Task Missing Numeric ID",
+        description:
+          "This task does not have a numeric ID for on-chain operations.",
+        variant: "destructive",
       });
       return;
     }
@@ -287,9 +343,9 @@ export default function TaskDetailPage() {
     // Need escrow contract
     if (!hasContracts) {
       toast({
-        title: 'No Escrow Contract',
-        description: 'SimpleEscrow contract not deployed.',
-        variant: 'destructive',
+        title: "No Escrow Contract",
+        description: "SimpleEscrow contract not deployed.",
+        variant: "destructive",
       });
       return;
     }
@@ -298,30 +354,29 @@ export default function TaskDetailPage() {
 
     try {
       toast({
-        title: 'Releasing payment on-chain...',
-        description: 'Please confirm the transaction in your wallet.',
+        title: "Releasing payment on-chain...",
+        description: "Please confirm the transaction in your wallet.",
       });
 
       // Call approveAndRelease on-chain
       const hash = await writeContractAsync({
         address: escrowAddress,
         abi: SIMPLE_ESCROW_ABI,
-        functionName: 'approveAndRelease',
+        functionName: "approveAndRelease",
         args: [BigInt(task.numericId), agentAddress as Address],
       });
 
       setTxHash(hash as Address);
       toast({
-        title: 'Transaction submitted',
-        description: 'Waiting for confirmation...',
+        title: "Transaction submitted",
+        description: "Waiting for confirmation...",
       });
-
     } catch (error: any) {
-      console.error('Error releasing payment:', error);
+      console.error("Error releasing payment:", error);
       toast({
-        title: 'Transaction Failed',
-        description: error.message || 'Please try again.',
-        variant: 'destructive',
+        title: "Transaction Failed",
+        description: error.message || "Please try again.",
+        variant: "destructive",
       });
       setIsReleasing(false);
     }
@@ -333,26 +388,26 @@ export default function TaskDetailPage() {
 
     try {
       const response = await fetch(`/api/tasks/${task.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'CANCELLED' }),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "CANCELLED" }),
       });
 
       const result = await response.json();
       if (result.success) {
         toast({
-          title: 'Task cancelled',
-          description: 'The task has been cancelled.',
+          title: "Task cancelled",
+          description: "The task has been cancelled.",
         });
         refreshTask();
       } else {
-        throw new Error(result.error || 'Failed to cancel task');
+        throw new Error(result.error || "Failed to cancel task");
       }
     } catch (error: any) {
       toast({
-        title: 'Error',
+        title: "Error",
         description: error.message,
-        variant: 'destructive',
+        variant: "destructive",
       });
     }
   };
@@ -395,8 +450,10 @@ export default function TaskDetailPage() {
           <div className="text-center py-12">
             <AlertCircle className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
             <h2 className="text-xl font-semibold mb-2">Task Not Found</h2>
-            <p className="text-muted-foreground">The task you're looking for doesn't exist.</p>
-            <Button className="mt-4" onClick={() => router.push('/')}>
+            <p className="text-muted-foreground">
+              The task you're looking for doesn't exist.
+            </p>
+            <Button className="mt-4" onClick={() => router.push("/")}>
               Go Home
             </Button>
           </div>
@@ -413,7 +470,11 @@ export default function TaskDetailPage() {
       <ClientNavbar />
       <main className="container px-4 py-8">
         {/* Back button */}
-        <Button variant="ghost" className="mb-6" onClick={() => router.push('/')}>
+        <Button
+          variant="ghost"
+          className="mb-6"
+          onClick={() => router.push("/")}
+        >
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back to Tasks
         </Button>
@@ -425,22 +486,27 @@ export default function TaskDetailPage() {
             <div>
               <div className="flex items-start justify-between gap-4 mb-4">
                 <h1 className="text-2xl font-bold">{task.title}</h1>
-                <Badge className={status.color}>
-                  {status.icon}
-                  <span className="ml-1">{status.label}</span>
-                </Badge>
+                {status && (
+                  <Badge className={status.color}>
+                    {status.icon}
+                    {status.label}
+                  </Badge>
+                )}
               </div>
 
               {/* Task Meta */}
               <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
                 <div className="flex items-center gap-1">
                   <Clock className="h-4 w-4" />
-                  Created {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true })}
+                  Created{" "}
+                  {formatDistanceToNow(new Date(task.createdAt), {
+                    addSuffix: true,
+                  })}
                 </div>
                 {task.deadline && (
                   <div className="flex items-center gap-1">
                     <Clock className="h-4 w-4" />
-                    Deadline: {format(new Date(task.deadline), 'PPP')}
+                    Deadline: {format(new Date(task.deadline), "PPP")}
                   </div>
                 )}
                 {task.txHash && (
@@ -476,7 +542,7 @@ export default function TaskDetailPage() {
                     onClick={handleSwitchNetwork}
                     disabled={isSwitchingChain}
                   >
-                    {isSwitchingChain ? 'Switching...' : 'Switch Network'}
+                    {isSwitchingChain ? "Switching..." : "Switch Network"}
                   </Button>
                 </div>
               </div>
@@ -521,11 +587,14 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3">
                   <Coins className="h-8 w-8 text-yellow-500" />
                   <div>
-                    <p className="text-2xl font-bold">{task.reward} {task.tokenSymbol}</p>
+                    <p className="text-2xl font-bold">
+                      {task.reward} {task.tokenSymbol}
+                    </p>
                     {task.numericId && escrowExists && (
                       <p className="text-sm text-muted-foreground">
-                        On-chain Escrow: {escrowAmount.toFixed(2)} {task.tokenSymbol}
-                        {escrowReleased && ' (Released)'}
+                        On-chain Escrow: {escrowAmount.toFixed(2)}{" "}
+                        {task.tokenSymbol}
+                        {escrowReleased && " (Released)"}
                       </p>
                     )}
                   </div>
@@ -534,12 +603,13 @@ export default function TaskDetailPage() {
             </Card>
 
             {/* Escrow Status Warning */}
-            {task.status === 'IN_PROGRESS' && !hasEscrow && isAgent && (
+            {task.status === "IN_PROGRESS" && !hasEscrow && isAgent && (
               <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-900 rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 text-yellow-600" />
                   <span className="text-yellow-800 dark:text-yellow-200">
-                    ⚠️ Escrow not deposited yet. Wait for the creator to deposit escrow before completing work.
+                    ⚠️ Escrow not deposited yet. Wait for the creator to deposit
+                    escrow before completing work.
                   </span>
                 </div>
               </div>
@@ -555,13 +625,17 @@ export default function TaskDetailPage() {
                   <div className="flex items-center gap-3">
                     <Avatar>
                       <AvatarFallback>
-                        {task.agent.name?.[0]?.toUpperCase() || task.agent.walletAddress.slice(1, 3).toUpperCase()}
+                        {task.agent.name?.[0]?.toUpperCase() ||
+                          task.agent.walletAddress.slice(1, 3).toUpperCase()}
                       </AvatarFallback>
                     </Avatar>
                     <div>
-                      <p className="font-medium">{task.agent.name || 'Anonymous Agent'}</p>
+                      <p className="font-medium">
+                        {task.agent.name || "Anonymous Agent"}
+                      </p>
                       <p className="text-sm text-muted-foreground font-mono">
-                        {task.agent.walletAddress.slice(0, 8)}...{task.agent.walletAddress.slice(-6)}
+                        {task.agent.walletAddress.slice(0, 8)}...
+                        {task.agent.walletAddress.slice(-6)}
                       </p>
                     </div>
                   </div>
@@ -578,13 +652,19 @@ export default function TaskDetailPage() {
                 <CardContent>
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
                     <FileText className="h-4 w-4 text-muted-foreground" />
-                    <code className="text-sm flex-1 truncate">{task.resultHash}</code>
+                    <code className="text-sm flex-1 truncate">
+                      {task.resultHash}
+                    </code>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => copyToClipboard(task.resultHash!)}
                     >
-                      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {copied ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
                     </Button>
                   </div>
                 </CardContent>
@@ -592,12 +672,17 @@ export default function TaskDetailPage() {
             )}
 
             {/* Bids List */}
-            <BidList task={task} bids={bids} onBidSubmitted={refreshTask} onBidAccepted={refreshTask} />
+            <BidList
+              task={task}
+              bids={bids}
+              onBidSubmitted={refreshTask}
+              onBidAccepted={refreshTask}
+            />
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
               {/* Agent actions - Complete Task */}
-              {isAgent && task.status === 'IN_PROGRESS' && (
+              {isAgent && task.status === "IN_PROGRESS" && (
                 <Button
                   onClick={handleCompleteTask}
                   disabled={isLoadingTx || !hasEscrow}
@@ -605,12 +690,12 @@ export default function TaskDetailPage() {
                 >
                   <CheckCircle2 className="h-4 w-4" />
                   Mark Complete
-                  {!hasEscrow && ' (Waiting for Escrow)'}
+                  {!hasEscrow && " (Waiting for Escrow)"}
                 </Button>
               )}
 
               {/* Creator actions - Release Payment */}
-              {isCreator && task.status === 'COMPLETED' && (
+              {isCreator && task.status === "COMPLETED" && (
                 <Button
                   onClick={handleReleasePayment}
                   disabled={isLoadingTx || !isCorrectNetwork || !hasEscrow}
@@ -622,22 +707,23 @@ export default function TaskDetailPage() {
                     <Coins className="h-4 w-4" />
                   )}
                   Release Payment
-                  {!hasEscrow && ' (No Escrow)'}
+                  {!hasEscrow && " (No Escrow)"}
                 </Button>
               )}
 
               {/* Creator actions - Cancel Task */}
-              {isCreator && (task.status === 'OPEN' || task.status === 'IN_PROGRESS') && (
-                <Button
-                  variant="destructive"
-                  onClick={handleCancelTask}
-                  disabled={isLoadingTx}
-                  className="gap-2"
-                >
-                  <XCircle className="h-4 w-4" />
-                  Cancel Task
-                </Button>
-              )}
+              {isCreator &&
+                (task.status === "OPEN" || task.status === "IN_PROGRESS") && (
+                  <Button
+                    variant="destructive"
+                    onClick={handleCancelTask}
+                    disabled={isLoadingTx}
+                    className="gap-2"
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Cancel Task
+                  </Button>
+                )}
             </div>
           </div>
 
@@ -652,13 +738,17 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3">
                   <Avatar>
                     <AvatarFallback>
-                      {task.creator?.name?.[0]?.toUpperCase() || task.creator?.walletAddress?.slice(1, 3).toUpperCase()}
+                      {task.creator?.name?.[0]?.toUpperCase() ||
+                        task.creator?.walletAddress?.slice(1, 3).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <p className="font-medium">{task.creator?.name || 'Anonymous'}</p>
+                    <p className="font-medium">
+                      {task.creator?.name || "Anonymous"}
+                    </p>
                     <p className="text-sm text-muted-foreground font-mono">
-                      {task.creator?.walletAddress?.slice(0, 8)}...{task.creator?.walletAddress?.slice(-6)}
+                      {task.creator?.walletAddress?.slice(0, 8)}...
+                      {task.creator?.walletAddress?.slice(-6)}
                     </p>
                   </div>
                 </div>
@@ -666,7 +756,7 @@ export default function TaskDetailPage() {
             </Card>
 
             {/* Bid Form */}
-            {task.status === 'OPEN' && !isCreator && (
+            {task.status === "OPEN" && !isCreator && (
               <BidForm task={task} onBidSubmitted={refreshTask} />
             )}
 
@@ -682,13 +772,15 @@ export default function TaskDetailPage() {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Network</span>
                   <span className="font-medium">
-                    {isCorrectNetwork ? '✓ Polygon Amoy' : chain?.name || 'Not connected'}
+                    {isCorrectNetwork
+                      ? "✓ Polygon Amoy"
+                      : chain?.name || "Not connected"}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Mode</span>
                   <span className="font-medium">
-                    {task.numericId ? '✓ On-chain ready' : 'Database only'}
+                    {task.numericId ? "✓ On-chain ready" : "Database only"}
                   </span>
                 </div>
                 {task.numericId && (
@@ -704,12 +796,14 @@ export default function TaskDetailPage() {
                       ? escrowReleased
                         ? `✓ Released (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
                         : `✓ Deposited (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
-                      : '❌ Not deposited'}
+                      : "❌ Not deposited"}
                   </span>
                 </div>
                 {hasContracts && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Escrow Contract</span>
+                    <span className="text-muted-foreground">
+                      Escrow Contract
+                    </span>
                     <a
                       href={`https://amoy.polygonscan.com/address/${escrowAddress}`}
                       target="_blank"

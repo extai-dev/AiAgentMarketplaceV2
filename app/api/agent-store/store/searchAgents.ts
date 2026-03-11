@@ -1,23 +1,59 @@
 /**
  * Agent Search Service
  * Search and filter agents based on various criteria
+ * Uses 8004scan API for agent discovery
  */
 
 import { db } from '@/lib/db'
-import { PlatformAgent, InstalledAgent, AgentSearchFilters, AgentSearchResult } from '../types'
+import { PlatformAgent, AgentSearchFilters, AgentSearchResult } from '../types'
 import { AgentResolver } from '../registry/agentResolver'
-import { indexAgents } from '../registry/crossChainIndexer'
+import { EightThousandScanClient, create8004ScanClient } from '@/lib/8004scan/client'
 
 const prisma = db
+
+/**
+ * Map 8004scan Agent to PlatformAgent format
+ */
+function map8004ScanAgentToPlatformAgent(agent: {
+  chainId: string;
+  tokenId: string;
+  name: string;
+  description?: string;
+  symbol?: string;
+  owner: string;
+  uri?: string;
+  metadata?: {
+    name?: string;
+    description?: string;
+    image?: string;
+    capabilities?: string[];
+    protocols?: string[];
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}): PlatformAgent {
+  return {
+    id: `eip155:${agent.chainId}:${agent.tokenId}`,
+    name: agent.name,
+    description: agent.description || agent.metadata?.description || '',
+    capabilities: agent.metadata?.capabilities || [],
+    protocols: agent.metadata?.protocols || [],
+    dispatchEndpoint: '', // Not provided by API
+    source: 'erc8004',
+    verified: true,
+  }
+}
 
 /**
  * Agent Search Service
  */
 export class AgentSearchService {
   private resolver: AgentResolver
+  private scanClient: EightThousandScanClient
 
   constructor() {
     this.resolver = new AgentResolver()
+    this.scanClient = create8004ScanClient()
   }
 
   /**
@@ -37,84 +73,54 @@ export class AgentSearchService {
       tags,
     } = filters
 
-    // Build query conditions
-    const where: any = {}
+    // Get agents from different sources
+    let allAgents: PlatformAgent[] = []
 
-    // Filter by source (local, ERC-8004, or installed)
-    if (source) {
-      if (source === 'installed') {
-        if (!userId) {
-          // No userId provided, return empty results for installed
-          return []
-        }
-        where.id = { in: await this.getInstalledAgentIds(userId) }
-      } else if (source === 'erc8004') {
-        where.id = { startsWith: 'erc8004:' }
-      } else if (source === 'local') {
-        where.id = { startsWith: 'local:' }
-      }
-    }
-
-    // Filter by capability
-    if (capability) {
-      where.capabilities = { contains: capability }
-    }
-
-    // Filter by name
-    if (name) {
-      where.name = { contains: name, mode: 'insensitive' }
-    }
-
-    // Filter by installedBy
-    if (installedBy) {
-      where.installedBy = installedBy
-    }
-
-    // Get agents from database
-    // If no userId, get all installed agents (for discovery)
-    const installedAgents = await prisma.installedAgent.findMany({
-      where: userId ? { installedBy: userId } : {},
-      orderBy: { installedAt: 'desc' },
-    })
-
-    // Convert to PlatformAgent format
-    const platformAgents: PlatformAgent[] = installedAgents.map(agent => ({
-      id: agent.agentId,
-      name: agent.name,
-      description: agent.description || '',
-      capabilities: JSON.parse(agent.capabilities || '[]'),
-      protocols: [],
-      dispatchEndpoint: agent.dispatchEndpoint,
-      source: 'installed',
-      installedBy: agent.installedBy,
-      installedAt: agent.installedAt,
-      verified: true, // Installed agents are considered verified
-    }))
-
-    // If searching for installed agents only, return results
+    // Handle 'installed' source - get user's installed agents from database
     if (source === 'installed') {
-      return this.enrichResults(platformAgents, userId)
+      if (!userId) {
+        return []
+      }
+      const installedAgents = await this.getInstalledAgents(userId)
+      return this.enrichResults(installedAgents, userId)
     }
 
-    // For all other sources, we need to fetch agents from other sources
-    // This is a simplified implementation - in production, you'd integrate
-    // with local agents and ERC-8004 discovery
-    const allAgents = await this.getAllAgents(userId)
+    // Get installed agents from database (for user's installed agents tracking)
+    const dbInstalledAgents = await this.getInstalledAgentsFromDb(userId)
 
-    // Apply filters
-    let filteredAgents = allAgents.filter(agent => {
-      // Source filter
-      if (source && agent.source !== source) {
-        return false
+    // Handle 'erc8004' source or all sources
+    if (source === 'erc8004' || !source) {
+      // Fetch from 8004scan API
+      try {
+        const scanAgents = await this.get8004ScanAgents(filters)
+        allAgents = [...scanAgents]
+      } catch (error) {
+        console.error('Error fetching from 8004scan API:', error)
+        // Return empty array if API fails
+        allAgents = []
       }
+    }
 
+    // Also add user's installed agents to results if not filtering by source or if explicitly requested
+    if (!source) {
+      const installedPlatformAgents = await this.getInstalledAgents(userId)
+      const existingIds = new Set(allAgents.map(a => a.id))
+      installedPlatformAgents.forEach(agent => {
+        if (!existingIds.has(agent.id)) {
+          allAgents.push(agent)
+        }
+      })
+    }
+
+    // Apply in-memory filters that can't be done via API
+    let filteredAgents = allAgents.filter(agent => {
       // Capability filter
       if (capability && !this.resolver.matchCapabilities(agent, [capability])) {
         return false
       }
 
-      // Name filter
-      if (name && !agent.name.toLowerCase().includes(name.toLowerCase())) {
+      // Name filter (if not already used for API search)
+      if (name && source !== 'erc8004' && !agent.name.toLowerCase().includes(name.toLowerCase())) {
         return false
       }
 
@@ -128,6 +134,14 @@ export class AgentSearchService {
         return false
       }
 
+      // Tags filter
+      if (tags && tags.length > 0) {
+        const agentTags = agent.metadata?.tags || []
+        if (!tags.some(tag => agentTags.includes(tag))) {
+          return false
+        }
+      }
+
       return true
     })
 
@@ -135,173 +149,110 @@ export class AgentSearchService {
   }
 
   /**
-   * Get all available agents (local + ERC-8004 from indexer)
+   * Get agents from 8004scan API
    */
-  private async getAllAgents(userId?: string): Promise<PlatformAgent[]> {
-    const agents: PlatformAgent[] = []
+  private async get8004ScanAgents(filters: AgentSearchFilters): Promise<PlatformAgent[]> {
+    const { capability, name, protocol } = filters
+    
+    let agents: PlatformAgent[] = []
 
-    // Add installed agents (if userId provided, otherwise get all)
-    const installedAgents = await prisma.installedAgent.findMany({
-      where: userId ? { installedBy: userId } : {},
-    })
-
-    installedAgents.forEach(agent => {
-      agents.push({
-        id: agent.agentId,
-        name: agent.name,
-        description: agent.description || '',
-        capabilities: JSON.parse(agent.capabilities || '[]'),
-        protocols: [],
-        dispatchEndpoint: agent.dispatchEndpoint,
-        source: 'installed',
-        installedBy: agent.installedBy,
-        installedAt: agent.installedAt,
-        verified: true, // Installed agents are considered verified
-      })
-    })
-
-    // Fetch ERC-8004 agents from cross-chain indexer
-    try {
-      console.log('Fetching ERC-8004 agents from cross-chain indexer...')
-      
-      // Run the cross-chain indexing pipeline
-      const indexedAgents = await indexAgents()
-      
-      // Query indexed agents from database (all agents, not just user's)
-      const storedAgents = await prisma.installedAgent.findMany({
-        where: {
-          agentId: { startsWith: 'eip155:' },
-        },
-      })
-
-      // Add any stored agents that aren't already in the list
-      const existingIds = new Set(agents.map(a => a.id))
-      storedAgents.forEach(agent => {
-        if (!existingIds.has(agent.agentId)) {
-          agents.push({
-            id: agent.agentId,
-            name: agent.name,
-            description: agent.description || '',
-            capabilities: JSON.parse(agent.capabilities || '[]'),
-            protocols: [],
-            dispatchEndpoint: agent.dispatchEndpoint,
-            source: 'erc8004',
-            installedBy: agent.installedBy,
-            installedAt: agent.installedAt,
-            verified: true,
-          })
-        }
-      })
-
-      console.log(`Found ${storedAgents.length} ERC-8004 agents from cross-chain indexer`)
-    } catch (error) {
-      console.error('Error fetching from cross-chain indexer:', error)
-      
-      // Fallback: Try to get existing indexed agents from database even if indexing fails
-      console.log('Attempting fallback: retrieving existing indexed agents from database...')
+    // Use searchAgents() for semantic search when name or capability is provided
+    if (name || capability) {
       try {
-        const existingIndexedAgents = await prisma.installedAgent.findMany({
-          where: {
-            agentId: { startsWith: 'eip155:' },
-          },
+        const searchQuery = name || capability || ''
+        const response = await this.scanClient.searchAgents({
+          query: searchQuery,
+          capabilities: capability ? [capability] : undefined,
+          protocols: protocol ? [protocol] : undefined,
+          limit: 100,
         })
-        
-        const existingIds = new Set(agents.map(a => a.id))
-        existingIndexedAgents.forEach(agent => {
-          if (!existingIds.has(agent.agentId)) {
-            agents.push({
-              id: agent.agentId,
-              name: agent.name,
-              description: agent.description || '',
-              capabilities: JSON.parse(agent.capabilities || '[]'),
-              protocols: [],
-              dispatchEndpoint: agent.dispatchEndpoint,
-              source: 'erc8004',
-              installedBy: agent.installedBy,
-              installedAt: agent.installedAt,
-              verified: true,
-            })
-          }
-        })
-        
-        console.log(`Found ${existingIndexedAgents.length} existing indexed agents from fallback`)
-      } catch (fallbackError) {
-        console.error('Fallback also failed:', fallbackError)
-      }
-    }
 
-    // If still no agents found, add demo agents as fallback
-    if (agents.length === 0) {
-      console.log('No agents found from blockchain or database. Adding demo agents...')
-      const demoAgents = this.getDemoAgents()
-      agents.push(...demoAgents)
+        if (response.success && response.data) {
+          agents = response.data.map(map8004ScanAgentToPlatformAgent)
+          console.log(`Found ${agents.length} agents from 8004scan search API`)
+        }
+      } catch (error) {
+        console.error('8004scan searchAgents error:', error)
+        throw error
+      }
+    } else {
+      // Use listAgents() for listing with filtering
+      try {
+        const response = await this.scanClient.listAgents({
+          capabilities: capability ? [capability] : undefined,
+          protocols: protocol ? [protocol] : undefined,
+          limit: 100,
+        })
+
+        if (response.success && response.data) {
+          agents = response.data.map(map8004ScanAgentToPlatformAgent)
+          console.log(`Found ${agents.length} agents from 8004scan list API`)
+        }
+      } catch (error) {
+        console.error('8004scan listAgents error:', error)
+        throw error
+      }
     }
 
     return agents
   }
 
   /**
-   * Get demo agents for development/testing
+   * Get installed agents for a user from database
    */
-  private getDemoAgents(): PlatformAgent[] {
-    return [
-      {
-        id: 'demo:research-agent',
-        name: 'Research Agent',
-        description: 'AI agent specialized in blockchain research and analysis',
-        capabilities: ['research', 'analysis', 'data-collection'],
-        protocols: ['http', 'a2a'],
-        dispatchEndpoint: 'https://research-agent.example.com/api',
-        source: 'local',
-        verified: true,
-      },
-      {
-        id: 'demo:trading-agent',
-        name: 'Trading Agent',
-        description: 'Automated trading agent with DeFi integration',
-        capabilities: ['trading', 'defi', 'arbitrage'],
-        protocols: ['http', 'a2a'],
-        dispatchEndpoint: 'https://trading-agent.example.com/api',
-        source: 'local',
-        verified: true,
-      },
-      {
-        id: 'demo:analytics-agent',
-        name: 'Analytics Agent',
-        description: 'Real-time analytics and monitoring agent',
-        capabilities: ['analytics', 'monitoring', 'reporting'],
-        protocols: ['http', 'a2a'],
-        dispatchEndpoint: 'https://analytics-agent.example.com/api',
-        source: 'local',
-        verified: true,
-      },
-      {
-        id: 'demo:assistant-agent',
-        name: 'Assistant Agent',
-        description: 'General purpose AI assistant for task automation',
-        capabilities: ['assistant', 'task-automation', 'communication'],
-        protocols: ['http', 'a2a'],
-        dispatchEndpoint: 'https://assistant-agent.example.com/api',
-        source: 'local',
-        verified: true,
-      },
-    ]
-  }
+  private async getInstalledAgents(userId?: string): Promise<PlatformAgent[]> {
+    if (!userId) {
+      return []
+    }
 
-  /**
-   * Get installed agent IDs for user
-   */
-  private async getInstalledAgentIds(userId: string): Promise<string[]> {
-    const installed = await prisma.installedAgent.findMany({
+    const installedAgents = await prisma.installedAgent.findMany({
       where: { installedBy: userId },
-      select: { agentId: true },
+      orderBy: { installedAt: 'desc' },
     })
 
-    return installed.map(a => a.agentId)
+    return installedAgents.map(agent => ({
+      id: agent.agentId,
+      name: agent.name,
+      description: agent.description || '',
+      capabilities: JSON.parse(agent.capabilities || '[]'),
+      protocols: [],
+      dispatchEndpoint: agent.dispatchEndpoint,
+      source: 'installed' as const,
+      installedBy: agent.installedBy || 'unknown',
+      installedAt: agent.installedAt,
+      verified: true,
+    }))
   }
 
   /**
-   * Enrich results with additional data
+   * Get installed agents from database (without filtering by user)
+   */
+  private async getInstalledAgentsFromDb(userId?: string): Promise<PlatformAgent[]> {
+    const where = userId ? { installedBy: userId } : {}
+    
+    const installedAgents = await prisma.installedAgent.findMany({
+      where,
+      orderBy: { installedAt: 'desc' },
+    })
+
+    return installedAgents.map(agent => ({
+      id: agent.agentId,
+      name: agent.name,
+      description: agent.description || '',
+      capabilities: JSON.parse(agent.capabilities || '[]'),
+      protocols: [],
+      dispatchEndpoint: agent.dispatchEndpoint,
+      source: 'installed' as const,
+      installedBy: agent.installedBy || 'unknown',
+      installedAt: agent.installedAt,
+      verified: true,
+    }))
+  }
+
+
+
+  /**
+   * Enrich results with additional data (isInstalled, rating, reviewCount)
    */
   private async enrichResults(
     agents: PlatformAgent[],
