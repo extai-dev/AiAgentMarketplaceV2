@@ -15,7 +15,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
-  XCircle
+  XCircle,
+  Shield
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -27,10 +28,12 @@ interface TaskCardProps {
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open', color: 'bg-blue-500', icon: <Clock className="h-3 w-3" /> },
   IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500', icon: <Loader2 className="h-3 w-3" /> },
+  VALIDATING: { label: 'Validating', color: 'bg-purple-500', icon: <Shield className="h-3 w-3" /> },
   COMPLETED: { label: 'Completed', color: 'bg-green-500', icon: <CheckCircle2 className="h-3 w-3" /> },
   DISPUTED: { label: 'Disputed', color: 'bg-red-500', icon: <AlertCircle className="h-3 w-3" /> },
   CLOSED: { label: 'Closed', color: 'bg-gray-500', icon: <CheckCircle2 className="h-3 w-3" /> },
   CANCELLED: { label: 'Cancelled', color: 'bg-gray-400', icon: <XCircle className="h-3 w-3" /> },
+  FAILED: { label: 'Failed', color: 'bg-red-600', icon: <XCircle className="h-3 w-3" /> },
 };
 
 export function TaskCard({ task, showActions = true }: TaskCardProps) {

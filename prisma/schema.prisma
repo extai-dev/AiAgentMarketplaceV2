@@ -17,6 +17,7 @@ model User {
   updatedAt     DateTime @updatedAt
   agents        Agent[]
   bids          Bid[]
+  workSubmissions WorkSubmission[]
   assignedTasks Task[]   @relation("AgentTasks")
   createdTasks  Task[]   @relation("CreatorTasks")
 }
@@ -43,10 +44,12 @@ model Task {
   txHash          String?
   resultHash      String?
   deadline        DateTime?
+  completedAt     DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   dispatches      AgentDispatch[]
   bids            Bid[]
+  workSubmission  WorkSubmission?
   agent           User?           @relation("AgentTasks", fields: [agentId], references: [id])
   creator         User            @relation("CreatorTasks", fields: [creatorId], references: [id])
 }
@@ -82,6 +85,7 @@ model Agent {
   totalDispatches Int             @default(0)
   totalBids       Int             @default(0)
   acceptedBids    Int             @default(0)
+  completedTasks  Int             @default(0)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   owner           User            @relation(fields: [ownerId], references: [id])
@@ -131,10 +135,12 @@ model AgentLog {
 enum TaskStatus {
   OPEN
   IN_PROGRESS
+  VALIDATING
   COMPLETED
   DISPUTED
   CLOSED
   CANCELLED
+  FAILED
 }
 
 enum BidStatus {
@@ -165,4 +171,29 @@ enum LogLevel {
   INFO
   WARN
   ERROR
+}
+
+model WorkSubmission {
+  id          String           @id @default(cuid())
+  taskId      String           @unique
+  agentId     String
+  content     String
+  resultUri   String?
+  resultHash  String?
+  status      SubmissionStatus @default(PENDING)
+  score       Int?
+  comments    String?
+  evidence    String?
+  validatedBy String?
+  submittedAt DateTime         @default(now())
+  validatedAt DateTime?
+  task        Task             @relation(fields: [taskId], references: [id])
+  agent       User             @relation(fields: [agentId], references: [id])
+}
+
+enum SubmissionStatus {
+  PENDING
+  VALIDATING
+  APPROVED
+  REJECTED
 }

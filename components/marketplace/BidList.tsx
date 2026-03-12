@@ -70,11 +70,12 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
 
   // Parse escrow data
   const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
-  const onChainEscrowExists = escrowData ? escrowData[3] : false;
+  const onChainEscrowExists = escrowData ? escrowData[3] && Number(escrowData[0]) > 0 : false;
   const onChainEscrowAmount = escrowData ? Number(escrowData[0]) / 1e18 : 0;
   const onChainEscrowReleased = escrowData ? escrowData[4] : false;
 
   // Check if DB is out of sync with on-chain
+  // Only show warning if there's actually an escrow with amount > 0 on-chain
   const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN';
 
   // Read token allowance for escrow

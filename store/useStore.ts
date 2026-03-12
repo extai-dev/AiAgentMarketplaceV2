@@ -2,10 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 // Task status type
-export type TaskStatusType = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'DISPUTED' | 'CLOSED' | 'CANCELLED';
+export type TaskStatusType = 'OPEN' | 'IN_PROGRESS' | 'VALIDATING' | 'COMPLETED' | 'DISPUTED' | 'CLOSED' | 'CANCELLED' | 'FAILED';
 
 // Bid status type
 export type BidStatusType = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'WITHDRAWN';
+
+// Submission status type
+export type SubmissionStatusType = 'PENDING' | 'VALIDATING' | 'APPROVED' | 'REJECTED';
 
 // Agent status type
 export type AgentStatusType = 'ACTIVE' | 'PAUSED' | 'OFFLINE' | 'ERROR';

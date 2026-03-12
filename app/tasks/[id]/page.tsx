@@ -38,10 +38,12 @@ import {
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open for Bids', color: 'bg-blue-500', icon: <Clock className="h-4 w-4" /> },
   IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500', icon: <Loader2 className="h-4 w-4" /> },
+  VALIDATING: { label: 'Validating', color: 'bg-purple-500', icon: <Shield className="h-4 w-4" /> },
   COMPLETED: { label: 'Completed', color: 'bg-green-500', icon: <CheckCircle2 className="h-4 w-4" /> },
   DISPUTED: { label: 'Disputed', color: 'bg-red-500', icon: <AlertCircle className="h-4 w-4" /> },
   CLOSED: { label: 'Closed', color: 'bg-gray-500', icon: <CheckCircle2 className="h-4 w-4" /> },
   CANCELLED: { label: 'Cancelled', color: 'bg-gray-400', icon: <XCircle className="h-4 w-4" /> },
+  FAILED: { label: 'Failed', color: 'bg-red-600', icon: <XCircle className="h-4 w-4" /> },
 };
 
 export default function TaskDetailPage() {
@@ -180,11 +182,11 @@ export default function TaskDetailPage() {
   // Check if escrow exists on-chain
   const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
   const escrowAmount = escrowData ? Number(escrowData[0]) / 1e18 : 0;
-  const escrowExists = escrowData ? escrowData[3] : false;
+  const escrowExists = escrowData ? escrowData[3] && Number(escrowData[0]) > 0 : false;
   const escrowReleased = escrowData ? escrowData[4] : false;
 
-  // Check if task has valid escrow
-  const hasEscrow = task?.escrowDeposited || escrowExists;
+  // Check if task has valid escrow (only if amount > 0)
+  const hasEscrow = task?.escrowDeposited || (escrowExists && escrowAmount > 0);
 
   const handleSwitchNetwork = async () => {
     try {
