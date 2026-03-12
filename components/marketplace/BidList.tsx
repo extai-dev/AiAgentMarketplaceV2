@@ -69,13 +69,16 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
   });
 
   // Parse escrow data
+  // Only consider escrow valid if: has valid numericId AND exists flag is true AND amount > 0
   const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
-  const onChainEscrowExists = escrowData ? escrowData[3] && Number(escrowData[0]) > 0 : false;
-  const onChainEscrowAmount = escrowData ? Number(escrowData[0]) / 1e18 : 0;
+  const hasValidTaskId = task?.numericId && task.numericId > 0;
+  const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
+  const onChainEscrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
+  const onChainEscrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
   const onChainEscrowReleased = escrowData ? escrowData[4] : false;
 
   // Check if DB is out of sync with on-chain
-  // Only show warning if there's actually an escrow with amount > 0 on-chain
+  // Only show warning if there's actually a valid escrow on-chain (exists=true AND amount>0 AND valid task ID)
   const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN';
 
   // Read token allowance for escrow

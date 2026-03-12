@@ -46,6 +46,7 @@ export async function GET(
             createdAt: 'desc',
           },
         },
+        workSubmission: true,
       },
     });
 

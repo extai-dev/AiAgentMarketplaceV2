@@ -128,7 +128,7 @@ export async function validateWork(input: ValidateWorkInput) {
   // Get the resultHash from the input (it's stored in submission.resultHash)
   const submissionResult = await db.workSubmission.findUnique({
     where: { id: workSubmissionId },
-    select: { resultHash: true },
+    select: { resultHash: true, content: true },
   });
 
   // Can only validate pending or validating submissions

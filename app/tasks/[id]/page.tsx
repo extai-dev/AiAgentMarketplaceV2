@@ -14,6 +14,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { useStore, Task, Bid, TaskStatusType } from '@/store/useStore';
 import { isValidAddress } from '@/hooks/useTaskContract';
 import { SIMPLE_ESCROW_ABI } from '@/lib/contracts/SimpleEscrow';
@@ -32,7 +34,8 @@ import {
   FileText,
   Copy,
   Check,
-  Shield
+  Shield,
+  Send
 } from 'lucide-react';
 
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
@@ -58,10 +61,21 @@ export default function TaskDetailPage() {
 
   const [task, setTask] = useState<Task | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
+  const [workSubmission, setWorkSubmission] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [txHash, setTxHash] = useState<Address | null>(null);
   const [isReleasing, setIsReleasing] = useState(false);
+  const [isSubmittingWork, setIsSubmittingWork] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  
+  // Work submission form state
+  const [workContent, setWorkContent] = useState('');
+  const [resultUri, setResultUri] = useState('');
+  
+  // Validation form state
+  const [validationScore, setValidationScore] = useState(100);
+  const [validationComments, setValidationComments] = useState('');
 
   // Simple escrow addresses
   const escrowAddress = SIMPLE_ESCROW_ADDRESS as Address;
@@ -96,6 +110,10 @@ export default function TaskDetailPage() {
         if (taskData.success) {
           setTask(taskData.data);
           setBids(taskData.data.bids || []);
+          // Also fetch work submission
+          if (taskData.data.workSubmission) {
+            setWorkSubmission(taskData.data.workSubmission);
+          }
         } else {
           toast({
             title: 'Error',
@@ -128,6 +146,12 @@ export default function TaskDetailPage() {
       if (data.success) {
         setTask(data.data);
         setBids(data.data.bids || []);
+        // Also refresh work submission
+        if (data.data.workSubmission) {
+          setWorkSubmission(data.data.workSubmission);
+        } else {
+          setWorkSubmission(null);
+        }
       }
     } catch (error) {
       console.error('Failed to refresh task:', error);
@@ -180,12 +204,15 @@ export default function TaskDetailPage() {
   const isAgent = address?.toLowerCase() === task?.agent?.walletAddress?.toLowerCase();
 
   // Check if escrow exists on-chain
+  // Only consider escrow valid if: has valid numericId AND exists flag is true AND amount > 0
   const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
-  const escrowAmount = escrowData ? Number(escrowData[0]) / 1e18 : 0;
-  const escrowExists = escrowData ? escrowData[3] && Number(escrowData[0]) > 0 : false;
+  const hasValidTaskId = task?.numericId && task.numericId > 0;
+  const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
+  const escrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
+  const escrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
   const escrowReleased = escrowData ? escrowData[4] : false;
 
-  // Check if task has valid escrow (only if amount > 0)
+  // Check if task has valid escrow (only if amount > 0 and valid task ID)
   const hasEscrow = task?.escrowDeposited || (escrowExists && escrowAmount > 0);
 
   const handleSwitchNetwork = async () => {
@@ -197,49 +224,124 @@ export default function TaskDetailPage() {
   };
 
   // Complete Task - DATABASE ONLY (but requires escrow)
-  const handleCompleteTask = async () => {
-    if (!task || !isAgent) return;
+  // This is now replaced by work submission flow
+  // const handleCompleteTask = async () => { ... }
 
-    // Check if escrow has been deposited
+  // Submit Work - Agent submits work for validation
+  const handleSubmitWork = async () => {
+    if (!task || !isAgent || !workContent.trim()) return;
+    
     if (!hasEscrow) {
       toast({
-        title: 'Cannot Complete Task',
+        title: 'Cannot Submit Work',
         description: 'Escrow has not been deposited yet. Wait for the creator to deposit escrow.',
         variant: 'destructive',
       });
       return;
     }
 
-    const resultHash = `ipfs://QmResult${Date.now()}`;
-
+    setIsSubmittingWork(true);
     try {
-      const response = await fetch(`/api/tasks/${task.id}`, {
-        method: 'PUT',
+      const response = await fetch(`/api/tasks/${task.id}/submit`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          status: 'COMPLETED',
-          resultHash,
+          agentWalletAddress: address,
+          content: workContent,
+          resultUri: resultUri || undefined,
+          resultHash: resultUri ? `hash://${Date.now()}` : undefined,
         }),
       });
 
       const result = await response.json();
       if (result.success) {
         toast({
-          title: 'Task marked complete!',
-          description: 'Waiting for creator to release payment.',
+          title: 'Work Submitted!',
+          description: 'Your work has been submitted for validation.',
         });
+        setWorkContent('');
+        setResultUri('');
         refreshTask();
       } else {
-        throw new Error(result.error || 'Failed to update task');
+        throw new Error(result.error || 'Failed to submit work');
       }
     } catch (error: any) {
+      console.error('Error submitting work:', error);
       toast({
         title: 'Error',
         description: error.message,
         variant: 'destructive',
       });
+    } finally {
+      setIsSubmittingWork(false);
     }
   };
+
+  // Validate Work - Task creator validates submitted work
+  const handleValidateWork = async (approved: boolean) => {
+    if (!task || !isCreator || !workSubmission) return;
+
+    setIsValidating(true);
+    try {
+      const response = await fetch('/api/validation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          submissionId: workSubmission.id,
+          score: approved ? validationScore : Math.max(0, validationScore - 100),
+          comments: validationComments,
+          validatedBy: user?.id,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        toast({
+          title: approved ? 'Work Approved!' : 'Work Rejected',
+          description: approved 
+            ? 'The work has been approved. You can now release payment.'
+            : 'The work has been rejected. The agent can resubmit.',
+        });
+        setValidationComments('');
+        refreshTask();
+      } else {
+        throw new Error(result.error || 'Failed to validate work');
+      }
+    } catch (error: any) {
+      console.error('Error validating work:', error);
+      toast({
+        title: 'Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // Fetch work submission for this task
+  const fetchWorkSubmission = async () => {
+    if (!task) return;
+    try {
+      const response = await fetch(`/api/tasks/${task.id}`);
+      const data = await response.json();
+      if (data.success && data.data.workSubmission) {
+        setWorkSubmission(data.data.workSubmission);
+      } else {
+        setWorkSubmission(null);
+      }
+    } catch (error) {
+      console.error('Error fetching work submission:', error);
+      setWorkSubmission(null);
+    }
+  };
+
+  // Load work submission when task changes
+  useEffect(() => {
+    if (task) {
+      fetchWorkSubmission();
+    }
+  }, [task?.id]);
 
   // Release Payment - ON-CHAIN (approveAndRelease)
   const handleReleasePayment = async () => {
@@ -598,18 +700,7 @@ export default function TaskDetailPage() {
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
-              {/* Agent actions - Complete Task */}
-              {isAgent && task.status === 'IN_PROGRESS' && (
-                <Button
-                  onClick={handleCompleteTask}
-                  disabled={isLoadingTx || !hasEscrow}
-                  className="gap-2"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  Mark Complete
-                  {!hasEscrow && ' (Waiting for Escrow)'}
-                </Button>
-              )}
+              {/* Agent actions - Submit Work is now in the sidebar */}
 
               {/* Creator actions - Release Payment */}
               {isCreator && task.status === 'COMPLETED' && (
@@ -670,6 +761,168 @@ export default function TaskDetailPage() {
             {/* Bid Form */}
             {task.status === 'OPEN' && !isCreator && (
               <BidForm task={task} onBidSubmitted={refreshTask} />
+            )}
+
+            {/* Work Submission Form - For Agent */}
+            {task.status === 'IN_PROGRESS' && isAgent && hasEscrow && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Submit Work
+                  </CardTitle>
+                  <CardDescription>
+                    Submit your completed work for validation
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <label className="text-sm font-medium">Work Description</label>
+                    <Textarea
+                      value={workContent}
+                      onChange={(e) => setWorkContent(e.target.value)}
+                      placeholder="Describe the work you have completed..."
+                      rows={4}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Result URI (Optional)</label>
+                    <Input
+                      value={resultUri}
+                      onChange={(e) => setResultUri(e.target.value)}
+                      placeholder="ipfs:// or http://..."
+                      className="mt-1"
+                    />
+                  </div>
+                  <Button
+                    onClick={handleSubmitWork}
+                    disabled={isSubmittingWork || !workContent.trim()}
+                    className="w-full gap-2"
+                  >
+                    {isSubmittingWork ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                    Submit Work for Validation
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Work Validation Form - For Creator */}
+            {task.status === 'VALIDATING' && isCreator && workSubmission && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    Validate Work
+                  </CardTitle>
+                  <CardDescription>
+                    Review and validate the submitted work
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="p-3 bg-muted rounded-lg">
+                    <p className="text-sm font-medium mb-1">Submitted Work:</p>
+                    <p className="text-sm text-muted-foreground">{workSubmission.content}</p>
+                    {workSubmission.resultUri && (
+                      <a 
+                        href={workSubmission.resultUri} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-500 hover:underline"
+                      >
+                        View Result
+                      </a>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Score (0-100)</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={validationScore}
+                      onChange={(e) => setValidationScore(parseInt(e.target.value) || 0)}
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Score ≥70 passes validation
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Comments</label>
+                    <Textarea
+                      value={validationComments}
+                      onChange={(e) => setValidationComments(e.target.value)}
+                      placeholder="Provide feedback on the work..."
+                      rows={3}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => handleValidateWork(true)}
+                      disabled={isValidating}
+                      className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
+                    >
+                      {isValidating ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4" />
+                      )}
+                      Approve
+                    </Button>
+                    <Button
+                      onClick={() => handleValidateWork(false)}
+                      disabled={isValidating}
+                      variant="destructive"
+                      className="flex-1 gap-2"
+                    >
+                      {isValidating ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <XCircle className="h-4 w-4" />
+                      )}
+                      Reject
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Work Submission Status */}
+            {workSubmission && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Submission Status
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Status:</span>
+                    <Badge variant={workSubmission.status === 'APPROVED' ? 'default' : workSubmission.status === 'REJECTED' ? 'destructive' : 'secondary'}>
+                      {workSubmission.status}
+                    </Badge>
+                  </div>
+                  {workSubmission.score !== null && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Score:</span>
+                      <span className="font-medium">{workSubmission.score}/100</span>
+                    </div>
+                  )}
+                  {workSubmission.comments && (
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Feedback:</span>
+                      <p className="mt-1">{workSubmission.comments}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
 
             {/* Contract Status */}

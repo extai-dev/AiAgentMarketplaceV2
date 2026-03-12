@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     ensureHandlersInitialized();
 
     const body = await request.json();
-    const { submissionId, score, comments, evidence } = body;
+    const { submissionId, score, comments, evidence, validatedBy } = body;
 
     // Validation
     if (!submissionId) {
@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
       score,
       comments,
       evidence,
+      validatedBy,
     });
 
     if (!result.success) {
