@@ -83,7 +83,7 @@ export async function GET(
  *   criteria?: object;
  *   execUrl?: string;
  *   status?: 'ACTIVE' | 'PAUSED';
- *   ownerWalletAddress: string; // Required for authorization
+ *   ownerId: string; // Required for authorization (user ID)
  * }
  */
 export async function PUT(
@@ -99,12 +99,12 @@ export async function PUT(
       criteria,
       execUrl,
       status,
-      ownerWalletAddress,
+      ownerId,
     } = body;
 
-    if (!ownerWalletAddress) {
+    if (!ownerId) {
       return NextResponse.json(
-        { success: false, error: 'ownerWalletAddress is required for authorization' },
+        { success: false, error: 'ownerId is required for authorization' },
         { status: 400 }
       );
     }
@@ -122,7 +122,7 @@ export async function PUT(
       );
     }
 
-    if (agent.owner.walletAddress.toLowerCase() !== ownerWalletAddress.toLowerCase()) {
+    if (agent.ownerId !== ownerId) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized: you are not the owner of this agent' },
         { status: 403 }
@@ -207,11 +207,11 @@ export async function DELETE(
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
-    const ownerWalletAddress = searchParams.get('ownerWalletAddress');
+    const ownerId = searchParams.get('ownerId');
 
-    if (!ownerWalletAddress) {
+    if (!ownerId) {
       return NextResponse.json(
-        { success: false, error: 'ownerWalletAddress is required for authorization' },
+        { success: false, error: 'ownerId is required for authorization' },
         { status: 400 }
       );
     }
@@ -229,7 +229,7 @@ export async function DELETE(
       );
     }
 
-    if (agent.owner.walletAddress.toLowerCase() !== ownerWalletAddress.toLowerCase()) {
+    if (agent.ownerId !== ownerId) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 403 }
@@ -276,11 +276,11 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { ownerWalletAddress } = body;
+    const { ownerId } = body;
 
-    if (!ownerWalletAddress) {
+    if (!ownerId) {
       return NextResponse.json(
-        { success: false, error: 'ownerWalletAddress is required for authorization' },
+        { success: false, error: 'ownerId is required for authorization' },
         { status: 400 }
       );
     }
@@ -298,7 +298,7 @@ export async function POST(
       );
     }
 
-    if (agent.owner.walletAddress.toLowerCase() !== ownerWalletAddress.toLowerCase()) {
+    if (agent.ownerId !== ownerId) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 403 }

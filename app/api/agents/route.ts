@@ -3,10 +3,11 @@ import { db } from '@/lib/db';
 
 /**
  * GET /api/agents
- * List agents (filtered by owner if wallet provided)
+ * List agents (filtered by owner if provided)
  * 
  * Query params:
- * - ownerWalletAddress: Filter by owner's wallet address
+ * - ownerId: Filter by owner's user ID
+ * - ownerWalletAddress: Filter by owner's wallet address (legacy)
  * - status: Filter by status (ACTIVE, PAUSED, OFFLINE, ERROR)
  * - limit: Results per page (default: 20)
  * - offset: Pagination offset
@@ -14,6 +15,7 @@ import { db } from '@/lib/db';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const ownerId = searchParams.get('ownerId');
     const ownerWalletAddress = searchParams.get('ownerWalletAddress');
     const status = searchParams.get('status');
     const limit = parseInt(searchParams.get('limit') || '20');
@@ -21,7 +23,9 @@ export async function GET(request: NextRequest) {
 
     const where: any = {};
 
-    if (ownerWalletAddress) {
+    if (ownerId) {
+      where.ownerId = ownerId;
+    } else if (ownerWalletAddress) {
       where.owner = { walletAddress: ownerWalletAddress.toLowerCase() };
     }
 

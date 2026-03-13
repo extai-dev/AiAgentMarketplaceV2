@@ -11,7 +11,8 @@ import { generateApiToken, hashApiToken } from '@/lib/agent-crypto';
  *   name: string;
  *   description?: string;
  *   walletAddress: string;
- *   ownerWalletAddress: string;
+ *   ownerId?: string; // User ID of the owner (preferred)
+ *   ownerWalletAddress?: string; // Owner's wallet address (legacy, for backwards compatibility)
  *   criteria?: {
  *     minReward?: number;
  *     maxReward?: number;
@@ -30,6 +31,7 @@ export async function POST(request: NextRequest) {
       name,
       description,
       walletAddress,
+      ownerId,
       ownerWalletAddress,
       criteria,
       execUrl,
@@ -50,9 +52,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!ownerWalletAddress || !/^0x[a-fA-F0-9]{40}$/.test(ownerWalletAddress)) {
+    // Validate that either ownerId or ownerWalletAddress is provided
+    if (!ownerId && !ownerWalletAddress) {
       return NextResponse.json(
-        { success: false, error: 'Valid owner wallet address is required' },
+        { success: false, error: 'Either ownerId or ownerWalletAddress is required' },
         { status: 400 }
       );
     }
@@ -69,19 +72,46 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get or create owner
-    let owner = await db.user.findUnique({
-      where: { walletAddress: ownerWalletAddress.toLowerCase() },
-    });
-
-    if (!owner) {
-      owner = await db.user.create({
-        data: {
-          walletAddress: ownerWalletAddress.toLowerCase(),
-          name: 'Agent Owner',
-          role: 'agent_owner',
-        },
+    // Get owner user - either by ID or by wallet address
+    let owner;
+    if (ownerId) {
+      owner = await db.user.findUnique({
+        where: { id: ownerId },
       });
+      if (!owner) {
+        return NextResponse.json(
+          { success: false, error: 'Owner user not found' },
+          { status: 400 }
+        );
+      }
+    } else if (ownerWalletAddress) {
+      // Legacy: look up or create user by wallet address
+      if (!/^0x[a-fA-F0-9]{40}$/.test(ownerWalletAddress)) {
+        return NextResponse.json(
+          { success: false, error: 'Valid owner wallet address is required' },
+          { status: 400 }
+        );
+      }
+      owner = await db.user.findUnique({
+        where: { walletAddress: ownerWalletAddress.toLowerCase() },
+      });
+      if (!owner) {
+        owner = await db.user.create({
+          data: {
+            walletAddress: ownerWalletAddress.toLowerCase(),
+            name: 'Agent Owner',
+            role: 'agent_owner',
+          },
+        });
+      }
+    }
+
+    // Ensure owner is defined (TypeScript needs this check)
+    if (!owner) {
+      return NextResponse.json(
+        { success: false, error: 'Failed to find or create owner user' },
+        { status: 400 }
+      );
     }
 
     // Check if wallet address already used by another agent
@@ -140,7 +170,7 @@ export async function POST(request: NextRequest) {
         agentId: agent.id,
         level: 'INFO',
         action: 'AGENT_CREATED',
-        message: `Agent "${name}" registered by ${ownerWalletAddress.slice(0, 8)}...`,
+        message: `Agent "${name}" registered by user ${owner.id}`,
         metadata: JSON.stringify({ criteria, execUrl }),
       },
     });

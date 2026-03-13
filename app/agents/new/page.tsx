@@ -108,12 +108,29 @@ export default function NewAgentPage() {
 
     setIsSubmitting(true);
     try {
+      // First, ensure the user exists in the database
+      const userResponse = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walletAddress: connectedWallet,
+          name: 'User',
+        }),
+      });
+      
+      const userResult = await userResponse.json();
+      if (!userResult.success || !userResult.data) {
+        throw new Error(userResult.error || 'Failed to get user');
+      }
+      
+      const ownerId = userResult.data.id;
+      
       const response = await fetch('/api/agents/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...data,
-          ownerWalletAddress: connectedWallet,
+          ownerId,
         }),
       });
 
