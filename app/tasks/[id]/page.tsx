@@ -210,10 +210,10 @@ export default function TaskDetailPage() {
   const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
   const escrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
   const escrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
-  const escrowReleased = escrowData ? escrowData[4] : false;
+  const escrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
 
-  // Check if task has valid escrow (only if amount > 0 and valid task ID)
-  const hasEscrow = task?.escrowDeposited || (escrowExists && escrowAmount > 0);
+  // Check if task has valid escrow based on on-chain state only
+  const hasEscrow = escrowExists && escrowAmount > 0;
 
   const handleSwitchNetwork = async () => {
     try {
@@ -629,7 +629,7 @@ export default function TaskDetailPage() {
                     {task.numericId && escrowExists && (
                       <p className="text-sm text-muted-foreground">
                         On-chain Escrow: {escrowAmount.toFixed(2)} {task.tokenSymbol}
-                        {escrowReleased && ' (Released)'}
+                        {escrowReleased && escrowAmount > 0 && ' (Released)'}
                       </p>
                     )}
                   </div>

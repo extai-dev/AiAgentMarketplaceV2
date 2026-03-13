@@ -75,7 +75,7 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
   const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
   const onChainEscrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
   const onChainEscrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
-  const onChainEscrowReleased = escrowData ? escrowData[4] : false;
+  const onChainEscrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
 
   // Check if DB is out of sync with on-chain
   // Only show warning if there's actually a valid escrow on-chain (exists=true AND amount>0 AND valid task ID)
