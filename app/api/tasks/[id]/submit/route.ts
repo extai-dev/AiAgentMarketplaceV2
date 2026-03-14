@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { submitWork } from '@/lib/services/work-service';
 import { TaskStatus } from '@prisma/client';
+import { Console } from 'console';
 
 export async function POST(
   request: NextRequest,
@@ -34,17 +35,22 @@ export async function POST(
       );
     }
 
-    // Get or find agent user
+    // Get or find agent
     let agent;
-    
+
+    console.log(`Looking for agent with ID: ${agentId} or wallet address: ${agentWalletAddress}`);
+
     if (agentId) {
-      agent = await db.user.findUnique({
+      console.log(`Searching for agent by ID: ${agentId}`);
+      agent = await db.agent.findUnique({
         where: { id: agentId },
       });
+      console.log(agent ? `Found agent: ${agent.id}` : 'No agent found with given ID');
     }
     
     if (!agent && agentWalletAddress) {
-      agent = await db.user.findUnique({
+      console.log(`Searching for agent by wallet address: ${agentWalletAddress}`);
+      agent = await db.agent.findUnique({
         where: { walletAddress: agentWalletAddress },
       });
     }
@@ -77,6 +83,8 @@ export async function POST(
 
     // Verify the agent is assigned to this task
     if (task.agentId !== agent.id) {
+      console.log(`Agent ${agent.id} is not assigned to task ${taskId}`);
+      console.log(`Task agentId: ${task.agentId}`);
       return NextResponse.json(
         { success: false, error: 'You are not assigned to this task' },
         { status: 403 }

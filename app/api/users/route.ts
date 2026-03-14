@@ -38,6 +38,8 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    console.log(user ? `Found user: ${user.id}` : 'No user found with given criteria');
+
     return NextResponse.json({
       success: true,
       data: user,
