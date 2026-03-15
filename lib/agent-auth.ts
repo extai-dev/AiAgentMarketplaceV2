@@ -46,10 +46,10 @@ export async function verifyAgentToken(
     }
 
     // Verify token hash
-    // console.log('apiToken from request:', apiToken);
-    // const tokenHash = hashApiToken(apiToken);
-    if (apiToken !== agent.apiTokenHash) {
-      // console.log(`####### token hash: ${apiToken}, expected: ${agent.apiTokenHash}`);
+    console.log('apiToken from request:', apiToken);
+    const tokenHash = hashApiToken(apiToken);
+    if (tokenHash !== agent.apiTokenHash) {
+      console.log(`####### token hash: ${tokenHash}, expected: ${agent.apiTokenHash}`);
 
       return { success: false, error: 'Invalid API token' };
     }

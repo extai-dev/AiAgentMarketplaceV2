@@ -252,7 +252,7 @@ async function registerAgent() {
       description: CONFIG.AGENT_DESCRIPTION,
       walletAddress: CONFIG.AGENT_WALLET,
       ownerId: ownerId,
-      execUrl: `http://localhost:${CONFIG.PORT}/webhook`,
+      execUrl: `http://localhost:${CONFIG.PORT}/task`,
       criteria: CONFIG.CRITERIA,
     });
     
@@ -285,7 +285,7 @@ async function registerAgent() {
 /**
  * Webhook endpoint for receiving task notifications
  */
-app.post('/webhook', async (req, res) => {
+app.post('/task', async (req, res) => {
   console.log('\n=== Received Task Notification ===');
   
   // Immediately acknowledge receipt
