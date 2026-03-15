@@ -18,7 +18,7 @@
 **/contracts/typechain-types/
 
 # Database
-**/prisma/dev.db
+# **/prisma/dev.db
 
 # testing
 /coverage
