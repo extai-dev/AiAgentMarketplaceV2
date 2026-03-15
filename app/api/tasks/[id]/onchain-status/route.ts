@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ethers } from 'ethers';
-import { TASK_ESCROW_ABI } from '@/lib/contracts/TaskEscrow';
-import { NEW_ADDRESSES, OLD_ADDRESSES } from '@/lib/contracts/addresses';
+import { SIMPLE_ESCROW_ABI } from '@/lib/contracts/SimpleEscrow';
+import { SIMPLE_ESCROW_ADDRESS } from '@/lib/contracts/addresses';
 
 export async function GET(
   request: NextRequest,
@@ -29,33 +29,33 @@ export async function GET(
       });
     }
 
-    // Determine which escrow address to use
-    const escrowAddress = task.escrowAddress ||
-      (task.onChainId ? OLD_ADDRESSES.escrow : NEW_ADDRESSES.escrow);
+    // Use SimpleEscrow for all tasks
+    const escrowAddress = task.escrowAddress || SIMPLE_ESCROW_ADDRESS;
 
     // Query on-chain status
     const provider = new ethers.JsonRpcProvider('https://rpc-amoy.polygon.technology');
-    const contract = new ethers.Contract(escrowAddress, TASK_ESCROW_ABI, provider);
+    const contract = new ethers.Contract(escrowAddress, SIMPLE_ESCROW_ABI, provider);
 
     try {
-      const onChainTask = await contract.getTask(task.onChainId);
+      const escrowInfo = await contract.getEscrow(task.onChainId);
 
       return NextResponse.json({
         success: true,
         data: {
           hasOnChain: true,
           onChainId: task.onChainId,
-          status: Number(onChainTask.status),
-          statusName: ['OPEN', 'IN_PROGRESS', 'COMPLETED', 'DISPUTED', 'CANCELLED', 'CLOSED'][onChainTask.status] || 'UNKNOWN',
-          assignedAgent: onChainTask.assignedAgent,
-          reward: ethers.formatEther(onChainTask.reward),
+          amount: ethers.formatEther(escrowInfo[0]),
+          creator: escrowInfo[1],
+          agent: escrowInfo[2],
+          exists: escrowInfo[3],
+          released: escrowInfo[4],
           escrowAddress,
         }
       });
     } catch (error: any) {
       return NextResponse.json({
         success: false,
-        error: 'Failed to read on-chain task: ' + (error.message || 'Unknown error'),
+        error: 'Failed to read on-chain escrow: ' + (error.message || 'Unknown error'),
         data: { hasOnChain: true, onChainId: task.onChainId, escrowAddress }
       });
     }

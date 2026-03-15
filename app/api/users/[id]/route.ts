@@ -24,8 +24,6 @@ export async function GET(
         _count: {
           select: {
             createdTasks: true,
-            assignedTasks: true,
-            bids: true,
           },
         },
       },

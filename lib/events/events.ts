@@ -120,7 +120,7 @@ export interface EscrowReleasedEvent {
   escrowId: string;
   taskId: string;
   agentId: string;
-  amount: number;
+  amount: string | number;
   txHash?: string;
 }
 

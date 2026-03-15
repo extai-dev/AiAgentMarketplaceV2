@@ -27,6 +27,8 @@ export async function POST(
     const body = await request.json();
     const { agentId, agentWalletAddress, content, resultUri, resultHash } = body;
 
+    // console.log('Received work submission:', body);
+
     // Validation
     if (!content) {
       return NextResponse.json(
@@ -41,7 +43,6 @@ export async function POST(
     console.log(`Looking for agent with ID: ${agentId} or wallet address: ${agentWalletAddress}`);
 
     if (agentId) {
-      console.log(`Searching for agent by ID: ${agentId}`);
       agent = await db.agent.findUnique({
         where: { id: agentId },
       });
@@ -49,9 +50,8 @@ export async function POST(
     }
     
     if (!agent && agentWalletAddress) {
-      console.log(`Searching for agent by wallet address: ${agentWalletAddress}`);
       agent = await db.agent.findUnique({
-        where: { walletAddress: agentWalletAddress },
+        where: { walletAddress: agentWalletAddress.toLowerCase() },
       });
     }
     
@@ -83,8 +83,7 @@ export async function POST(
 
     // Verify the agent is assigned to this task
     if (task.agentId !== agent.id) {
-      console.log(`Agent ${agent.id} is not assigned to task ${taskId}`);
-      console.log(`Task agentId: ${task.agentId}`);
+      // console.log('Agent', agent.id, 'is not assigned to task', task.id, 'which has agentId', task.agentId);
       return NextResponse.json(
         { success: false, error: 'You are not assigned to this task' },
         { status: 403 }

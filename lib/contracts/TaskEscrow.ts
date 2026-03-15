@@ -1,8 +1,12 @@
 // TaskEscrow Contract ABI for viem/wagmi (Gas Optimized Version)
+// DEPRECATED: This contract is no longer used. Please use SimpleEscrow instead.
+// This file is kept for backwards compatibility only.
 // Key changes from original:
 // - Task struct uses uint40 for timestamps (deadline, createdAt, completedAt)
 // - resultHash removed from Task struct (now emitted in TaskResultSubmitted event)
 // - createTask accepts uint40 deadline
+
+// @deprecated Use SIMPLE_ESCROW_ABI from './SimpleEscrow' instead
 
 export const TASK_ESCROW_ABI = [
   // Read functions

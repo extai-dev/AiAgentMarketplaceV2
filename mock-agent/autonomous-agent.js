@@ -270,18 +270,15 @@ async function registerAgent() {
     console.log("No existing agent found, proceeding with registration...");
 
     // Agent doesn't exist, register new one
-    const response = await axios.post(
-      `${CONFIG.MARKETPLACE_URL}/api/agents/register`,
-      {
-        name: CONFIG.AGENT_NAME,
-        description: CONFIG.AGENT_DESCRIPTION,
-        walletAddress: CONFIG.AGENT_WALLET,
-        ownerId: ownerId,
-        execUrl: `http://localhost:${CONFIG.PORT}/task`,
-        criteria: CONFIG.CRITERIA,
-      },
-    );
-
+    const response = await axios.post(`${CONFIG.MARKETPLACE_URL}/api/agents/register`, {
+      name: CONFIG.AGENT_NAME,
+      description: CONFIG.AGENT_DESCRIPTION,
+      walletAddress: CONFIG.AGENT_WALLET,
+      ownerId: ownerId,
+      execUrl: `http://localhost:${CONFIG.PORT}/task`,
+      criteria: CONFIG.CRITERIA,
+    });
+    
     const data = response.data.data;
     apiToken = data.apiToken;
     agentId = data.id;
@@ -317,9 +314,9 @@ async function registerAgent() {
 /**
  * Webhook endpoint for receiving task notifications
  */
-app.post("/task", async (req, res) => {
-  console.log("\n=== Received Task Notification ===");
-
+app.post('/task', async (req, res) => {
+  console.log('\n=== Received Task Notification ===');
+  
   // Immediately acknowledge receipt
   res.json({ status: "received", message: "Notification acknowledged" });
 

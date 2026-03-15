@@ -17,7 +17,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { useStore, Task, Bid, TaskStatusType } from '@/store/useStore';
-import { isValidAddress } from '@/hooks/useTaskContract';
+import { isValidAddress } from '@/lib/contracts/addresses';
 import { SIMPLE_ESCROW_ABI } from '@/lib/contracts/SimpleEscrow';
 import { ERC20_ABI, SIMPLE_ESCROW_ADDRESS, TASK_TOKEN_ADDRESS } from '@/lib/contracts/addresses';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -164,6 +164,22 @@ export default function TaskDetailPage() {
       if (!isConfirmed || !txHash || !task || !isReleasing) return;
 
       try {
+        // First, update the escrow status to RELEASED in the database
+        const escrowResponse = await fetch('/api/escrow/release', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            taskId: task.id,
+            txHash,
+          }),
+        });
+
+        const escrowResult = await escrowResponse.json();
+        if (!escrowResult.success) {
+          console.error('Failed to update escrow status:', escrowResult.error);
+          // Continue anyway - the on-chain release happened
+        }
+
         // Update database after blockchain confirmation
         const response = await fetch(`/api/tasks/${task.id}`, {
           method: 'PUT',
@@ -203,17 +219,28 @@ export default function TaskDetailPage() {
   const isCreator = address?.toLowerCase() === task?.creator?.walletAddress?.toLowerCase();
   const isAgent = address?.toLowerCase() === task?.agent?.walletAddress?.toLowerCase();
 
-  // Check if escrow exists on-chain
-  // Only consider escrow valid if: has valid numericId AND exists flag is true AND amount > 0
-  const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
-  const hasValidTaskId = task?.numericId && task.numericId > 0;
-  const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
-  const escrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
-  const escrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
-  const escrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
-
-  // Check if task has valid escrow based on on-chain state only
-  const hasEscrow = escrowExists && escrowAmount > 0;
+  // Get escrow status from DATABASE only (source of truth)
+  // For new tasks without deposit, DB escrow will be null
+  const dbEscrow = (task as any)?.escrow;
+  const dbEscrowStatus = dbEscrow?.status; // 'PENDING' | 'LOCKED' | 'RELEASED' | 'REFUNDED'
+  const dbEscrowAmount = dbEscrow?.amount || 0;
+  
+  // DATABASE is the source of truth - only trust DB status
+  // No on-chain fallback
+  let escrowStatus: 'PENDING' | 'LOCKED' | 'RELEASED' | 'REFUNDED' = 'PENDING';
+  if (dbEscrowStatus) {
+    escrowStatus = dbEscrowStatus;
+  }
+  
+  // Check escrow exists - use both escrow record amount AND task's escrowDeposited flag
+  // The escrowDeposited flag on Task is set when deposit occurs, so it's a reliable fallback
+  const hasEscrowFromRecord = dbEscrowAmount > 0;
+  const hasEscrowFromFlag = (task as any)?.escrowDeposited === true;
+  const hasEscrow = hasEscrowFromRecord || hasEscrowFromFlag;
+  
+  // Display amount - use escrow record amount, or fall back to task reward if escrowDeposited is true
+  const displayEscrowAmount = hasEscrowFromRecord ? dbEscrowAmount : (hasEscrowFromFlag ? task.reward : 0);
+  const isEscrowReleased = escrowStatus === 'RELEASED';
 
   const handleSwitchNetwork = async () => {
     try {
@@ -347,8 +374,8 @@ export default function TaskDetailPage() {
   const handleReleasePayment = async () => {
     if (!task || !isCreator || !isCorrectNetwork) return;
 
-    // Check if escrow exists on-chain
-    if (!hasEscrow && !escrowExists) {
+    // Check if escrow exists (from DB or on-chain fallback)
+    if (!hasEscrow) {
       toast({
         title: 'No Escrow Deposit',
         description: 'Escrow has not been deposited on-chain. Cannot release payment.',
@@ -357,8 +384,8 @@ export default function TaskDetailPage() {
       return;
     }
 
-    // Check if already released
-    if (escrowReleased) {
+    // Check if already released (from DB)
+    if (isEscrowReleased) {
       toast({
         title: 'Already Released',
         description: 'Payment has already been released.',
@@ -626,11 +653,37 @@ export default function TaskDetailPage() {
                   <Coins className="h-8 w-8 text-yellow-500" />
                   <div>
                     <p className="text-2xl font-bold">{task.reward} {task.tokenSymbol}</p>
-                    {task.numericId && escrowExists && (
-                      <p className="text-sm text-muted-foreground">
-                        On-chain Escrow: {escrowAmount.toFixed(2)} {task.tokenSymbol}
-                        {escrowReleased && escrowAmount > 0 && ' (Released)'}
-                      </p>
+                    {hasEscrow && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-sm text-muted-foreground">
+                          Escrow: {displayEscrowAmount.toFixed(2)} {task.tokenSymbol}
+                        </p>
+                        {/* Escrow Status Badge */}
+                        {escrowStatus === 'RELEASED' && (
+                          <Badge className="bg-green-500 text-white text-xs">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Released
+                          </Badge>
+                        )}
+                        {escrowStatus === 'LOCKED' && (
+                          <Badge className="bg-yellow-500 text-white text-xs">
+                            <Coins className="h-3 w-3 mr-1" />
+                            Deposited
+                          </Badge>
+                        )}
+                        {escrowStatus === 'REFUNDED' && (
+                          <Badge className="bg-gray-500 text-white text-xs">
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Refunded
+                          </Badge>
+                        )}
+                        {escrowStatus === 'PENDING' && hasEscrow && (
+                          <Badge className="bg-blue-500 text-white text-xs">
+                            <Clock className="h-3 w-3 mr-1" />
+                            Pending
+                          </Badge>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -638,12 +691,48 @@ export default function TaskDetailPage() {
             </Card>
 
             {/* Escrow Status Warning */}
-            {task.status === 'IN_PROGRESS' && !hasEscrow && isAgent && (
+            {task.status === 'IN_PROGRESS' && !hasEscrow && isCreator && (
               <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-900 rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 text-yellow-600" />
                   <span className="text-yellow-800 dark:text-yellow-200">
-                    ⚠️ Escrow not deposited yet. Wait for the creator to deposit escrow before completing work.
+                    ⚠️ Escrow not deposited yet. Please deposit the escrow to start the work.
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Escrow Deposited - Ready for work */}
+            {task.status === 'IN_PROGRESS' && hasEscrow && !isEscrowReleased && isCreator && (
+              <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-900 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-green-800 dark:text-green-200">
+                    ✅ Escrow deposited and locked. Agent can now submit work for validation.
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Escrow Deposited - For Agent */}
+            {task.status === 'IN_PROGRESS' && hasEscrow && !isEscrowReleased && isAgent && (
+              <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-900 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-green-800 dark:text-green-200">
+                    ✅ Escrow has been deposited. You can now submit your work for validation.
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Escrow Released - Payment Complete */}
+            {isEscrowReleased && (
+              <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-900 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-green-800 dark:text-green-200">
+                    ✅ Payment has been released to the agent.
                   </span>
                 </div>
               </div>
@@ -703,7 +792,7 @@ export default function TaskDetailPage() {
               {/* Agent actions - Submit Work is now in the sidebar */}
 
               {/* Creator actions - Release Payment */}
-              {isCreator && task.status === 'COMPLETED' && (
+              {isCreator && task.status === 'COMPLETED' && !isEscrowReleased && (
                 <Button
                   onClick={handleReleasePayment}
                   disabled={isLoadingTx || !isCorrectNetwork || !hasEscrow}
@@ -714,8 +803,18 @@ export default function TaskDetailPage() {
                   ) : (
                     <Coins className="h-4 w-4" />
                   )}
-                  Release Payment
-                  {!hasEscrow && ' (No Escrow)'}
+                  {hasEscrow ? 'Release Payment' : 'No Escrow Deposited'}
+                </Button>
+              )}
+
+              {/* Show released status when already released */}
+              {isCreator && isEscrowReleased && (
+                <Button
+                  disabled
+                  className="gap-2 bg-green-600 hover:bg-green-700"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Payment Released
                 </Button>
               )}
 
@@ -809,6 +908,18 @@ export default function TaskDetailPage() {
                   </Button>
                 </CardContent>
               </Card>
+            )}
+
+            {/* Work Validation Status */}
+            {task.status === 'VALIDATING' && (
+              <div className="bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-900 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-purple-600" />
+                  <span className="text-purple-800 dark:text-purple-200">
+                    📝 Work is under validation. The task creator is reviewing the submitted work.
+                  </span>
+                </div>
+              </div>
             )}
 
             {/* Work Validation Form - For Creator */}
@@ -956,9 +1067,9 @@ export default function TaskDetailPage() {
                   <span className="text-muted-foreground">Escrow</span>
                   <span className="font-medium">
                     {hasEscrow
-                      ? escrowReleased
-                        ? `✓ Released (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
-                        : `✓ Deposited (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
+                      ? isEscrowReleased
+                        ? `✓ Released (${displayEscrowAmount.toFixed(2)} ${task.tokenSymbol})`
+                        : `✓ Deposited (${displayEscrowAmount.toFixed(2)} ${task.tokenSymbol})`
                       : '❌ Not deposited'}
                   </span>
                 </div>

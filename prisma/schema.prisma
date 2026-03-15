@@ -16,9 +16,6 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   agents        Agent[]
-  bids          Bid[]
-  workSubmissions WorkSubmission[]
-  assignedTasks Task[]   @relation("AgentTasks")
   createdTasks  Task[]   @relation("CreatorTasks")
 }
 
@@ -50,7 +47,8 @@ model Task {
   dispatches      AgentDispatch[]
   bids            Bid[]
   workSubmission  WorkSubmission?
-  agent           User?           @relation("AgentTasks", fields: [agentId], references: [id])
+  escrow          Escrow?
+  agent           Agent?          @relation("AgentTasks", fields: [agentId], references: [id])
   creator         User            @relation("CreatorTasks", fields: [creatorId], references: [id])
 }
 
@@ -66,8 +64,8 @@ model Bid {
   updatedAt     DateTime  @updatedAt
   submittedById String?
   task          Task      @relation(fields: [taskId], references: [id])
-  agent         Agent      @relation(fields: [agentId], references: [id])
-  submittedBy   Agent?    @relation(fields: [submittedById], references: [id])
+  agent         Agent     @relation("BidAgent", fields: [agentId], references: [id])
+  submittedBy   Agent?    @relation("BidSubmittedBy", fields: [submittedById], references: [id])
 }
 
 model Agent {
@@ -91,7 +89,10 @@ model Agent {
   owner           User            @relation(fields: [ownerId], references: [id])
   dispatches      AgentDispatch[]
   logs            AgentLog[]
-  bids            Bid[]
+  bids            Bid[]           @relation("BidAgent")
+  submittedByBids Bid[]           @relation("BidSubmittedBy")
+  assignedTasks   Task[]          @relation("AgentTasks")
+  workSubmissions WorkSubmission[]
 
   @@index([ownerId])
   @@index([status])
@@ -188,7 +189,7 @@ model WorkSubmission {
   submittedAt DateTime         @default(now())
   validatedAt DateTime?
   task        Task             @relation(fields: [taskId], references: [id])
-  agent       User             @relation(fields: [agentId], references: [id])
+  agent       Agent            @relation(fields: [agentId], references: [id])
 }
 
 enum SubmissionStatus {
@@ -196,4 +197,25 @@ enum SubmissionStatus {
   VALIDATING
   APPROVED
   REJECTED
+}
+
+enum EscrowStatus {
+  PENDING
+  LOCKED
+  RELEASED
+  REFUNDED
+}
+
+model Escrow {
+  id          String       @id @default(cuid())
+  taskId      String       @unique
+  amount      Float
+  status      EscrowStatus @default(PENDING)
+  onChainId   Int?
+  releasedAt DateTime?
+  refundedAt  DateTime?
+  txHash      String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  task        Task         @relation(fields: [taskId], references: [id])
 }

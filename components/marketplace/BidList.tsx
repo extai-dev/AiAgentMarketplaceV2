@@ -75,11 +75,19 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
   const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
   const onChainEscrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
   const onChainEscrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
-  const onChainEscrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
+  // Fix: Also check escrowData[3] (exists flag) to ensure escrow actually exists before checking released
+  const onChainEscrowReleased = escrowData && escrowData[3] && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
 
   // Check if DB is out of sync with on-chain
-  // Only show warning if there's actually a valid escrow on-chain (exists=true AND amount>0 AND valid task ID)
-  const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN';
+  // Only show warning if:
+  // 1. There's an accepted bid (meaning escrow should exist)
+  // 2. On-chain escrow actually exists
+  // 3. Database is not updated (escrowDeposited is false)
+  // 4. Task is still open
+  // This ensures we only show the sync warning when a bid WAS accepted but DB wasn't updated,
+  // not when there's just a new pending bid waiting to be accepted.
+  const hasAcceptedBid = bids.some(b => b.status === 'ACCEPTED');
+  const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN' && hasAcceptedBid;
 
   // Read token allowance for escrow
   const { data: tokenAllowance, refetch: refetchAllowance } = useReadContract({
@@ -250,6 +258,20 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
 
     const amountWei = parseEther(bid.amount.toString());
 
+    // DEBUG: Log transaction parameters
+    console.log('[DEBUG] Deposit Transaction Parameters:', {
+      taskId: task.numericId,
+      taskIdType: typeof task.numericId,
+      bidAmount: bid.amount,
+      bidAmountType: typeof bid.amount,
+      amountWei: amountWei.toString(),
+      amountWeiHex: '0x' + amountWei.toString(16),
+      escrowAddress,
+      tokenAddress,
+      SIMPLE_ESCROW_ADDRESS,
+      TASK_TOKEN_ADDRESS,
+    });
+
     try {
       toast({
         title: 'Depositing escrow...',
@@ -307,6 +329,15 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
     setProcessingBidId(bid.id);
     setPendingBid(bid);
 
+    // DEBUG: Log bid details
+    console.log('[DEBUG] Accept Bid - Bid Details:', {
+      bidId: bid.id,
+      bidAmount: bid.amount,
+      bidAmountType: typeof bid.amount,
+      bidAmountString: bid.amount.toString(),
+      taskNumericId: task.numericId,
+    });
+
     const amount = bid.amount.toString();
     const amountWei = parseEther(amount);
 
@@ -325,18 +356,20 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
 
     try {
       // Check if we need to approve tokens
+      // Use MAX_UINT256 to approve once for all future transactions
+      const maxAllowance = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
       const allowance = tokenAllowance as bigint;
       if (!allowance || allowance < amountWei) {
         toast({
           title: 'Step 1/2: Approving Tokens',
-          description: 'Please confirm the approval transaction.',
+          description: 'Please confirm the approval transaction. This is needed only once.',
         });
 
         const approveHash = await writeContractAsync({
           address: tokenAddress,
           abi: ERC20_ABI,
           functionName: 'approve',
-          args: [escrowAddress, amountWei],
+          args: [escrowAddress, maxAllowance],
         });
 
         setApprovalTxHash(approveHash as Address);
