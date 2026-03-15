@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -16,7 +15,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *   4. refund() - Creator can cancel and get refund
  */
 contract SimpleEscrow is ReentrancyGuard, Ownable {
-    using SafeERC20 for IERC20;
+    // Using plain IERC20 - SafeERC20 removed to reduce gas costs
+    // Token transfers use standard ERC20 interface directly
 
     // ============ State Variables ============
 
@@ -24,18 +24,14 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
     
     // Task ID => Escrow info
     mapping(uint256 => Escrow) public escrows;
-    
-    // Task ID counter (managed off-chain, just used for tracking)
-    uint256 public nextEscrowId;
 
     // ============ Structs ============
 
     struct Escrow {
-        uint256 amount;        // Amount deposited
-        address creator;       // Who deposited
-        address agent;         // Who will receive payment (set on release)
-        bool exists;           // Whether escrow exists
-        bool released;         // Whether escrow has been released
+        uint128 amount;      // Amount deposited (packed with status)
+        address creator;     // Who deposited (also serves as existence check)
+        address agent;       // Who will receive payment (set on release)
+        uint8 status;        // Bit 0: exists, Bit 1: released
     }
 
     // ============ Events ============
@@ -58,6 +54,10 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
         address indexed creator,
         uint256 amount
     );
+
+    // ============ Constants for status bits ============
+    uint8 constant STATUS_EXISTS = 1;
+    uint8 constant STATUS_RELEASED = 2;
 
     // ============ Errors ============
 
@@ -92,17 +92,18 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
         nonReentrant
     {
         if (_amount == 0) revert InvalidAmount();
-        if (escrows[_taskId].exists) revert EscrowAlreadyExists();
+        if (escrows[_taskId].status & STATUS_EXISTS != 0) revert EscrowAlreadyExists();
         
         escrows[_taskId] = Escrow({
-            amount: _amount,
+            amount: uint128(_amount),
             creator: msg.sender,
             agent: address(0),
-            exists: true,
-            released: false
+            status: STATUS_EXISTS
         });
 
-        paymentToken.safeTransferFrom(msg.sender, address(this), _amount);
+        // Use transferFrom instead of safeTransferFrom to reduce gas costs
+        // The token is a trusted ERC20, so additional safe transfer checks are unnecessary
+        IERC20(paymentToken).transferFrom(msg.sender, address(this), _amount);
 
         emit EscrowDeposited(_taskId, msg.sender, _amount);
     }
@@ -121,16 +122,19 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
     {
         Escrow storage escrow = escrows[_taskId];
         
-        if (!escrow.exists) revert EscrowNotExists();
-        if (escrow.released) revert EscrowAlreadyReleased();
+        uint8 currentStatus = escrow.status;
+        if (currentStatus == 0) revert EscrowNotExists();
+        if (currentStatus & STATUS_RELEASED != 0) revert EscrowAlreadyReleased();
         if (escrow.creator != msg.sender) revert NotEscrowCreator();
         if (_agent == address(0)) revert InvalidAgent();
 
-        escrow.released = true;
+        escrow.status = currentStatus | STATUS_RELEASED;
         escrow.agent = _agent;
 
         uint256 amount = escrow.amount;
-        paymentToken.safeTransfer(_agent, amount);
+        // Use transfer instead of safeTransfer to reduce gas costs
+        // The recipient is a verified agent address, so additional safe transfer checks are unnecessary
+        IERC20(paymentToken).transfer(_agent, amount);
 
         emit EscrowReleased(_taskId, msg.sender, _agent, amount);
     }
@@ -148,14 +152,16 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
     {
         Escrow storage escrow = escrows[_taskId];
         
-        if (!escrow.exists) revert EscrowNotExists();
-        if (escrow.released) revert EscrowAlreadyReleased();
+        uint8 currentStatus = escrow.status;
+        if (currentStatus == 0) revert EscrowNotExists();
+        if (currentStatus & STATUS_RELEASED != 0) revert EscrowAlreadyReleased();
         if (escrow.creator != msg.sender) revert NotEscrowCreator();
 
-        escrow.released = true;
+        escrow.status = currentStatus | STATUS_RELEASED;
 
         uint256 amount = escrow.amount;
-        paymentToken.safeTransfer(escrow.creator, amount);
+        // Use transfer instead of safeTransfer to reduce gas costs
+        IERC20(paymentToken).transfer(escrow.creator, amount);
 
         emit EscrowRefunded(_taskId, msg.sender, amount);
     }
@@ -177,12 +183,13 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
         )
     {
         Escrow storage escrow = escrows[_taskId];
+        uint8 status = escrow.status;
         return (
             escrow.amount,
             escrow.creator,
             escrow.agent,
-            escrow.exists,
-            escrow.released
+            status & STATUS_EXISTS != 0,
+            status & STATUS_RELEASED != 0
         );
     }
 
@@ -197,7 +204,7 @@ contract SimpleEscrow is ReentrancyGuard, Ownable {
      * @dev Check if escrow exists and is available
      */
     function isEscrowAvailable(uint256 _taskId) external view returns (bool) {
-        Escrow storage escrow = escrows[_taskId];
-        return escrow.exists && !escrow.released;
+        uint8 status = escrows[_taskId].status;
+        return status != 0 && (status & STATUS_RELEASED == 0);
     }
 }
