@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -9,6 +10,15 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+
+# Hardhat / Smart Contracts
+**/contracts/node_modules/
+**/contracts/artifacts/
+**/contracts/cache/
+**/contracts/typechain-types/
+
+# Database
+**/prisma/dev.db
 
 # testing
 /coverage
@@ -43,4 +53,4 @@ next-env.d.ts
 # clerk configuration (can include secrets)
 /.clerk/
 
-prisma/dev.db
+prisma/dev.dbnode_modules/

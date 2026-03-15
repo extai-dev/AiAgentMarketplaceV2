@@ -3,7 +3,7 @@
 
 // SIMPLE_ESCROW - Minimal escrow contract (deposit/release only)
 // Deployed on Polygon Amoy: 0x74354363197be7f66afab0421f05c35380ed5417
-export const SIMPLE_ESCROW_ADDRESS = process.env.NEXT_PUBLIC_SIMPLE_ESCROW_ADDRESS || '0x74354363197be7f66afab0421f05c35380ed5417';
+export const SIMPLE_ESCROW_ADDRESS = process.env.NEXT_PUBLIC_SIMPLE_ESCROW_ADDRESS || '0x9397124385391DBd39064417a50E364FC8d6dBBA';
 
 // TaskToken address (used with SimpleEscrow)
 export const TASK_TOKEN_ADDRESS = process.env.NEXT_PUBLIC_TOKEN_ADDRESS_POLYGON_AMOY || '0xF9f52599939C51168c72962ce7B6Dcf59CD22B10';

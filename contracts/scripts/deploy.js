@@ -1,7 +1,7 @@
-import * as fs from "fs";
-import * as path from "path";
-import hardhat from "hardhat";
-const { ethers } = hardhat as any;
+const fs = require("fs");
+const path = require("path");
+const hardhat = require("hardhat");
+const { ethers } = hardhat;
 
 async function main() {
   console.log("🚀 Deploying contracts...\n");
@@ -20,13 +20,13 @@ async function main() {
   const tokenAddress = await token.getAddress();
   console.log("✅ MockERC20 deployed to:", tokenAddress);
 
-  // Deploy TaskEscrow
-  console.log("\n📄 Deploying TaskEscrow...");
-  const TaskEscrow = await ethers.getContractFactory("TaskEscrow");
-  const escrow = await TaskEscrow.deploy(tokenAddress);
+  // Deploy SimpleEscrow
+  console.log("\n📄 Deploying SimpleEscrow...");
+  const SimpleEscrow = await ethers.getContractFactory("SimpleEscrow");
+  const escrow = await SimpleEscrow.deploy(tokenAddress);
   await escrow.waitForDeployment();
   const escrowAddress = await escrow.getAddress();
-  console.log("✅ TaskEscrow deployed to:", escrowAddress);
+  console.log("✅ SimpleEscrow deployed to:", escrowAddress);
 
   // Save deployment addresses
   const deployments = {
@@ -39,6 +39,7 @@ async function main() {
     },
     escrow: {
       address: escrowAddress,
+      name: "SimpleEscrow",
     },
     deployer: deployer.address,
     timestamp: new Date().toISOString(),
@@ -69,7 +70,7 @@ async function main() {
   console.log("COPY THESE ADDRESSES TO YOUR .env FILE:");
   console.log("=================================================");
   console.log(`NEXT_PUBLIC_TOKEN_ADDRESS_POLYGON_AMOY=${tokenAddress}`);
-  console.log(`NEXT_PUBLIC_ESCROW_ADDRESS_POLYGON_AMOY=${escrowAddress}`);
+  console.log(`NEXT_PUBLIC_SIMPLE_ESCROW_ADDRESS=${escrowAddress}`);
   console.log("=================================================");
 }
 

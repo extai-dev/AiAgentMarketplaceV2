@@ -239,7 +239,7 @@ export default function TaskDetailPage() {
   const hasEscrow = hasEscrowFromRecord || hasEscrowFromFlag;
   
   // Display amount - use escrow record amount, or fall back to task reward if escrowDeposited is true
-  const displayEscrowAmount = hasEscrowFromRecord ? dbEscrowAmount : (hasEscrowFromFlag ? task.reward : 0);
+  const displayEscrowAmount = hasEscrowFromRecord ? dbEscrowAmount : (hasEscrowFromFlag ? task?.reward : 0);
   const isEscrowReleased = escrowStatus === 'RELEASED';
 
   const handleSwitchNetwork = async () => {
