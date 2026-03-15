@@ -86,6 +86,8 @@ async function marketplaceApi(method, endpoint, data = null) {
     throw new Error("Agent not registered");
   }
 
+  // console.log(apiToken ? `Using API token: ${apiToken.substring(0, 20)}...` : "No API token");
+
   const config = {
     method,
     url: `${CONFIG.MARKETPLACE_URL}${endpoint}`,
@@ -248,6 +250,7 @@ async function registerAgent() {
           console.log(`Agent ID: ${existingAgent.id}`);
           console.log(`Owner user ID: ${ownerUserId}`);
           console.log(`Wallet: ${existingAgent.walletAddress}`);
+          console.log(`apiTokenHash: ${existingAgent.apiTokenHash}`);
           console.log("Using existing agent credentials.");
           console.log("=====================================");
 
@@ -289,6 +292,7 @@ async function registerAgent() {
     console.log(`API Token: ${apiToken.substring(0, 20)}...`);
     console.log(`Wallet: ${CONFIG.AGENT_WALLET}`);
     console.log(`Criteria:`, CONFIG.CRITERIA);
+    console.log(`apiToken: ${apiToken ? apiToken.substring(0, 20) + "..." : "No API token"}`);
     console.log("=====================================");
 
     return true;
@@ -432,6 +436,7 @@ app.post("/task", async (req, res) => {
     const response = await marketplaceApi("POST", "/api/agents/callback", {
       type: "BID_RESPONSE",
       taskId: task.id,
+      agentId: agentId,
       decision: "bid",
       amount: bidAmount,
       message: `I can complete this task for ${bidAmount} ${task.tokenSymbol}.`,
