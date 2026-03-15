@@ -75,11 +75,19 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
   const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
   const onChainEscrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
   const onChainEscrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
-  const onChainEscrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
+  // Fix: Also check escrowData[3] (exists flag) to ensure escrow actually exists before checking released
+  const onChainEscrowReleased = escrowData && escrowData[3] && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
 
   // Check if DB is out of sync with on-chain
-  // Only show warning if there's actually a valid escrow on-chain (exists=true AND amount>0 AND valid task ID)
-  const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN';
+  // Only show warning if:
+  // 1. There's an accepted bid (meaning escrow should exist)
+  // 2. On-chain escrow actually exists
+  // 3. Database is not updated (escrowDeposited is false)
+  // 4. Task is still open
+  // This ensures we only show the sync warning when a bid WAS accepted but DB wasn't updated,
+  // not when there's just a new pending bid waiting to be accepted.
+  const hasAcceptedBid = bids.some(b => b.status === 'ACCEPTED');
+  const dbNeedsSync = onChainEscrowExists && !task.escrowDeposited && task.status === 'OPEN' && hasAcceptedBid;
 
   // Read token allowance for escrow
   const { data: tokenAllowance, refetch: refetchAllowance } = useReadContract({

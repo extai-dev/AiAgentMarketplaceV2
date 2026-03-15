@@ -24,12 +24,29 @@ export async function handleValidationCompleted(payload: TaskValidationCompleted
       },
     });
 
-    if (!task || !task.escrow) {
-      console.log(`[EscrowRelease] No escrow found for task ${payload.taskId}`);
+    if (!task) {
+      console.log(`[EscrowRelease] Task not found: ${payload.taskId}`);
       return;
     }
 
-    const escrow = task.escrow;
+    let escrow = task.escrow;
+
+    // If no escrow record exists, create one based on task data
+    if (!escrow && task.escrowDeposited && task.onChainId) {
+      escrow = await db.escrow.create({
+        data: {
+          taskId: task.id,
+          amount: task.reward,
+          status: EscrowStatus.LOCKED,
+          onChainId: task.onChainId,
+        },
+      });
+    }
+
+    if (!escrow) {
+      console.log(`[EscrowRelease] No escrow found for task ${payload.taskId}`);
+      return;
+    }
 
     // Check if escrow is in correct state
     if (escrow.status !== EscrowStatus.LOCKED) {

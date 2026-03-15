@@ -53,7 +53,8 @@ export async function POST(request: NextRequest) {
 
     // Lock the escrow funds
     const lockResult = await lockEscrowFunds({
-      escrowId: escrowResult.escrow.id,
+      taskId,
+      amount: amount.toString(),
       txHash,
     });
 

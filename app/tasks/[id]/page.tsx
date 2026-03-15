@@ -203,17 +203,23 @@ export default function TaskDetailPage() {
   const isCreator = address?.toLowerCase() === task?.creator?.walletAddress?.toLowerCase();
   const isAgent = address?.toLowerCase() === task?.agent?.walletAddress?.toLowerCase();
 
-  // Check if escrow exists on-chain
-  // Only consider escrow valid if: has valid numericId AND exists flag is true AND amount > 0
-  const escrowData = onChainEscrow as [bigint, Address, Address, boolean, boolean] | undefined;
-  const hasValidTaskId = task?.numericId && task.numericId > 0;
-  const escrowAmountRaw = escrowData ? escrowData[0] : BigInt(0);
-  const escrowAmount = hasValidTaskId ? Number(escrowAmountRaw) / 1e18 : 0;
-  const escrowExists = hasValidTaskId && escrowData ? (escrowData[3] && escrowAmountRaw > BigInt(0)) : false;
-  const escrowReleased = escrowData && escrowAmountRaw > BigInt(0) ? escrowData[4] : false;
-
-  // Check if task has valid escrow based on on-chain state only
-  const hasEscrow = escrowExists && escrowAmount > 0;
+  // Get escrow status from DATABASE only (source of truth)
+  // For new tasks without deposit, DB escrow will be null
+  const dbEscrow = (task as any)?.escrow;
+  const dbEscrowStatus = dbEscrow?.status; // 'PENDING' | 'LOCKED' | 'RELEASED' | 'REFUNDED'
+  const dbEscrowAmount = dbEscrow?.amount || 0;
+  
+  // DATABASE is the source of truth - only trust DB status
+  // No on-chain fallback
+  let escrowStatus: 'PENDING' | 'LOCKED' | 'RELEASED' | 'REFUNDED' = 'PENDING';
+  if (dbEscrowStatus) {
+    escrowStatus = dbEscrowStatus;
+  }
+  
+  // Only show escrow as existing if DB has a record with amount > 0
+  const hasEscrow = dbEscrowAmount > 0;
+  const displayEscrowAmount = dbEscrowAmount;
+  const isEscrowReleased = escrowStatus === 'RELEASED';
 
   const handleSwitchNetwork = async () => {
     try {
@@ -347,8 +353,8 @@ export default function TaskDetailPage() {
   const handleReleasePayment = async () => {
     if (!task || !isCreator || !isCorrectNetwork) return;
 
-    // Check if escrow exists on-chain
-    if (!hasEscrow && !escrowExists) {
+    // Check if escrow exists (from DB or on-chain fallback)
+    if (!hasEscrow) {
       toast({
         title: 'No Escrow Deposit',
         description: 'Escrow has not been deposited on-chain. Cannot release payment.',
@@ -357,8 +363,8 @@ export default function TaskDetailPage() {
       return;
     }
 
-    // Check if already released
-    if (escrowReleased) {
+    // Check if already released (from DB)
+    if (isEscrowReleased) {
       toast({
         title: 'Already Released',
         description: 'Payment has already been released.',
@@ -626,10 +632,10 @@ export default function TaskDetailPage() {
                   <Coins className="h-8 w-8 text-yellow-500" />
                   <div>
                     <p className="text-2xl font-bold">{task.reward} {task.tokenSymbol}</p>
-                    {task.numericId && escrowExists && (
+                    {task.numericId && hasEscrow && (
                       <p className="text-sm text-muted-foreground">
-                        On-chain Escrow: {escrowAmount.toFixed(2)} {task.tokenSymbol}
-                        {escrowReleased && escrowAmount > 0 && ' (Released)'}
+                        Escrow: {displayEscrowAmount.toFixed(2)} {task.tokenSymbol}
+                        {isEscrowReleased && displayEscrowAmount > 0 && ' (Released)'}
                       </p>
                     )}
                   </div>
@@ -956,9 +962,9 @@ export default function TaskDetailPage() {
                   <span className="text-muted-foreground">Escrow</span>
                   <span className="font-medium">
                     {hasEscrow
-                      ? escrowReleased
-                        ? `✓ Released (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
-                        : `✓ Deposited (${escrowAmount.toFixed(2)} ${task.tokenSymbol})`
+                      ? isEscrowReleased
+                        ? `✓ Released (${displayEscrowAmount.toFixed(2)} ${task.tokenSymbol})`
+                        : `✓ Deposited (${displayEscrowAmount.toFixed(2)} ${task.tokenSymbol})`
                       : '❌ Not deposited'}
                   </span>
                 </div>

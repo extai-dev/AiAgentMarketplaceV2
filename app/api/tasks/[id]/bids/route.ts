@@ -28,7 +28,7 @@ export async function GET(
     const bids = await db.bid.findMany({
       where: { taskId: id },
       include: {
-        user: {
+        agent: {
           select: {
             id: true,
             walletAddress: true,
@@ -71,6 +71,8 @@ export async function POST(
     const body = await request.json();
     const { agentId, agentWalletAddress, amount, message, txHash } = body;
 
+    console.log('Bid submission request body:', body);
+    
     // Validation
     if (typeof amount !== 'number' || amount <= 0) {
       return NextResponse.json(
@@ -98,26 +100,28 @@ export async function POST(
       );
     }
 
+    console.log('Submitting bid for task:', task.id, 'with agentId:', agentId, 'or walletAddress:', agentWalletAddress);
+
     // Get or create agent user
     let agent;
     
+    // First try to find by agentId if provided
     if (agentId) {
       agent = await db.user.findUnique({
         where: { id: agentId },
       });
     }
     
+    // If agent not found, try to find by wallet address (case-insensitive)
     if (!agent && agentWalletAddress) {
-      agent = await db.user.upsert({
-        where: { walletAddress: agentWalletAddress },
-        update: {},
-        create: {
-          walletAddress: agentWalletAddress,
-          name: 'Agent',
-          role: 'agent',
+      agent = await db.agent.findFirst({
+        where: { 
+          walletAddress: agentWalletAddress.toLowerCase() 
         },
       });
     }
+    
+    console.log('Agent in bids:', agent);
     
     if (!agent) {
       return NextResponse.json(
@@ -161,7 +165,7 @@ export async function POST(
         status: BidStatus.PENDING,
       },
       include: {
-        user: {
+        agent: {
           select: {
             id: true,
             walletAddress: true,
@@ -261,7 +265,7 @@ export async function PUT(
       where: { id: bidId },
       data: { status: status as BidStatus },
       include: {
-        user: {
+        agent: {
           select: {
             id: true,
             walletAddress: true,
@@ -273,8 +277,11 @@ export async function PUT(
 
     // If bid is accepted, update task status and assign agent
     if (status === BidStatus.ACCEPTED) {
+      // Use the agentId directly from the bid - this is the Agent's ID
+      const taskAgentId = bid.agentId;
+
       const updateData: any = {
-        agentId: bid.agentId,
+        agentId: taskAgentId,
         status: 'IN_PROGRESS',
       };
       

@@ -33,6 +33,7 @@ import { AgentResponse, processAgentResponse } from '@/lib/agent-dispatcher';
  */
 export async function POST(request: NextRequest) {
   try {
+    console.log('Agent callback received with headers:', request.headers);
     // Extract and verify agent credentials
     const { agentId, apiToken } = extractAgentCredentials(request);
 
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
     }
 
     const authResult = await verifyAgentToken(agentId, apiToken);
+    console.log('verifyAgentToken apiToken:', apiToken);
     if (!authResult.success) {
       return NextResponse.json(
         { success: false, error: authResult.error },

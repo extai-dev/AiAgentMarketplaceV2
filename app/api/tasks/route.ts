@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
         },
         bids: {
           include: {
-            user: {
+            agent: {
               select: {
                 id: true,
                 walletAddress: true,

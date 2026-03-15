@@ -421,14 +421,14 @@ export async function processAgentResponse(
     const bid = await db.bid.create({
       data: {
         taskId,
-        agentId: agent.owner.id, // Use owner's user ID for the bid
+        agentId: agentId, // Use the agent's ID for the bid
         amount: response.amount,
         message: response.message || `Automated bid from AI agent: ${agent.name}`,
         status: 'PENDING',
         submittedById: agentId,
       },
       include: {
-        user: {
+        agent: {
           select: { id: true, walletAddress: true, name: true },
         },
         submittedBy: {

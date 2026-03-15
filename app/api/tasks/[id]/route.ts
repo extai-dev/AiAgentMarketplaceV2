@@ -21,7 +21,6 @@ export async function GET(
             id: true,
             walletAddress: true,
             name: true,
-            email: true,
           },
         },
         agent: {
@@ -29,12 +28,11 @@ export async function GET(
             id: true,
             walletAddress: true,
             name: true,
-            email: true,
           },
         },
         bids: {
           include: {
-            user: {
+            agent: {
               select: {
                 id: true,
                 walletAddress: true,
@@ -47,6 +45,7 @@ export async function GET(
           },
         },
         workSubmission: true,
+        escrow: true,
       },
     });
 

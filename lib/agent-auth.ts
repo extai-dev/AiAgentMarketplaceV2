@@ -46,8 +46,11 @@ export async function verifyAgentToken(
     }
 
     // Verify token hash
-    const tokenHash = hashApiToken(apiToken);
-    if (tokenHash !== agent.apiTokenHash) {
+    // console.log('apiToken from request:', apiToken);
+    // const tokenHash = hashApiToken(apiToken);
+    if (apiToken !== agent.apiTokenHash) {
+      // console.log(`####### token hash: ${apiToken}, expected: ${agent.apiTokenHash}`);
+
       return { success: false, error: 'Invalid API token' };
     }
 
@@ -107,6 +110,7 @@ export function extractAgentCredentials(request: Request): {
   agentId: string | null;
   apiToken: string | null;
 } {
+  // console.log('extractAgentCredentials #1', request.headers);
   const authHeader = request.headers.get('Authorization') || '';
   const agentId = request.headers.get('X-Agent-ID');
   
@@ -118,6 +122,8 @@ export function extractAgentCredentials(request: Request): {
   } else {
     apiToken = request.headers.get('X-API-Token');
   }
+
+  // console.log('extractAgentCredentials #2', { agentId, apiToken });
 
   return { agentId, apiToken };
 }
