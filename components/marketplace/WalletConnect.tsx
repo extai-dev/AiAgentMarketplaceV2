@@ -63,7 +63,12 @@ export function WalletConnect() {
   // Fetch/create user on wallet connect
   useEffect(() => {
     async function syncUser() {
-      if (address && !user) {
+      // Create/update user when:
+      // 1. There's a wallet address AND
+      // 2. Either no user in store OR the wallet address doesn't match stored user
+      const needsUserSync = address && (!user || user.walletAddress.toLowerCase() !== address.toLowerCase());
+      
+      if (needsUserSync) {
         try {
           const response = await fetch('/api/users', {
             method: 'POST',
