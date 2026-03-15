@@ -122,6 +122,47 @@ export async function getEscrowByTaskId(taskId: string) {
  */
 export async function releaseEscrowFunds(params: { escrowId: string; txHash?: string }) {
   try {
+    // Check if it's a database UUID (contains letters) or numeric ID
+    const hasLetters = /[a-zA-Z]/.test(params.escrowId);
+    
+    // If it looks like a database ID, use it directly to find the escrow
+    if (hasLetters || params.escrowId.includes('-')) {
+      // This is likely a database ID - try to find escrow directly
+      const escrow = await db.escrow.findUnique({
+        where: { id: params.escrowId },
+        include: { task: { include: { agent: true } } },
+      });
+      
+      if (!escrow) {
+        return { success: false, error: 'Escrow not found' };
+      }
+      
+      if (!escrow.task?.agent?.walletAddress) {
+        return { success: false, error: 'No agent assigned to this task' };
+      }
+      
+      // Update escrow status to released
+      const updatedEscrow = await db.escrow.update({
+        where: { id: params.escrowId },
+        data: {
+          status: EscrowStatus.RELEASED,
+          releasedAt: new Date(),
+          txHash: params.txHash,
+        },
+      });
+      
+      return {
+        success: true,
+        escrow: {
+          id: updatedEscrow.id,
+          taskId: updatedEscrow.taskId,
+          status: updatedEscrow.status,
+          released: true,
+        },
+      };
+    }
+    
+    // Original logic for numeric IDs
     // Extract task ID from escrow ID (format: "escrow-{taskId}" or just numeric)
     const taskIdStr = params.escrowId.replace('escrow-', '');
     const taskId = parseInt(taskIdStr, 10);

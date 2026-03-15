@@ -258,6 +258,20 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
 
     const amountWei = parseEther(bid.amount.toString());
 
+    // DEBUG: Log transaction parameters
+    console.log('[DEBUG] Deposit Transaction Parameters:', {
+      taskId: task.numericId,
+      taskIdType: typeof task.numericId,
+      bidAmount: bid.amount,
+      bidAmountType: typeof bid.amount,
+      amountWei: amountWei.toString(),
+      amountWeiHex: '0x' + amountWei.toString(16),
+      escrowAddress,
+      tokenAddress,
+      SIMPLE_ESCROW_ADDRESS,
+      TASK_TOKEN_ADDRESS,
+    });
+
     try {
       toast({
         title: 'Depositing escrow...',
@@ -315,6 +329,15 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
     setProcessingBidId(bid.id);
     setPendingBid(bid);
 
+    // DEBUG: Log bid details
+    console.log('[DEBUG] Accept Bid - Bid Details:', {
+      bidId: bid.id,
+      bidAmount: bid.amount,
+      bidAmountType: typeof bid.amount,
+      bidAmountString: bid.amount.toString(),
+      taskNumericId: task.numericId,
+    });
+
     const amount = bid.amount.toString();
     const amountWei = parseEther(amount);
 
@@ -333,18 +356,20 @@ export function BidList({ task, bids, onBidAccepted, onBidSubmitted }: BidListPr
 
     try {
       // Check if we need to approve tokens
+      // Use MAX_UINT256 to approve once for all future transactions
+      const maxAllowance = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
       const allowance = tokenAllowance as bigint;
       if (!allowance || allowance < amountWei) {
         toast({
           title: 'Step 1/2: Approving Tokens',
-          description: 'Please confirm the approval transaction.',
+          description: 'Please confirm the approval transaction. This is needed only once.',
         });
 
         const approveHash = await writeContractAsync({
           address: tokenAddress,
           abi: ERC20_ABI,
           functionName: 'approve',
-          args: [escrowAddress, amountWei],
+          args: [escrowAddress, maxAllowance],
         });
 
         setApprovalTxHash(approveHash as Address);
