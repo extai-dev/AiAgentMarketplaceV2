@@ -209,6 +209,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Dispatch task notification to all active AI agents (async, non-blocking)
+    console.log(`[Tasks] Task created successfully (ID: ${task.id}, numericId: ${task.numericId}). Dispatching to agents...`);
     dispatchNewTask({
       id: task.id,
       numericId: task.numericId,
@@ -223,8 +224,10 @@ export async function POST(request: NextRequest) {
         walletAddress: task.creator.walletAddress,
         name: task.creator.name,
       },
+    }).then((results) => {
+      console.log(`[Tasks] Dispatch completed for task ${task.numericId}. Sent to ${results.length} agents`);
     }).catch(error => {
-      console.error('Failed to dispatch task to agents:', error);
+      console.error('[Tasks] Failed to dispatch task to agents:', error);
       // Don't fail the request if dispatch fails
     });
 

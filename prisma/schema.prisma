@@ -75,8 +75,10 @@ model Agent {
   ownerId         String
   walletAddress   String          @unique
   criteria        String          @default("{}")
+  capabilities    String          @default("[]")  // JSON array of agent capabilities
   execUrl         String?
-  apiTokenHash    String?
+  apiTokenHash    String?         // Hash for verification (one-way)
+  apiTokenEncrypted String?       // Encrypted token for signing notifications (can be decrypted)
   status          AgentStatus     @default(ACTIVE)
   lastSeen        DateTime?
   lastError       String?

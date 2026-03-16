@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { signPayload } from '@/lib/agent-crypto';
+import { signPayload, decryptApiToken } from '@/lib/agent-crypto';
 
 /**
  * Agent criteria structure
@@ -285,6 +285,8 @@ export async function dispatchNewTask(task: {
   escrowDeposited: boolean;
   creator: { walletAddress: string; name: string | null };
 }): Promise<DispatchResult[]> {
+  console.log(`[AgentDispatcher] Starting dispatch for task ${task.id} (${task.numericId}): "${task.title}"`);
+  
   // Get all active agents with execution URLs
   const agents = await db.agent.findMany({
     where: {
@@ -297,17 +299,52 @@ export async function dispatchNewTask(task: {
       execUrl: true,
       criteria: true,
       apiTokenHash: true,
+      apiTokenEncrypted: true,
       status: true,
     },
   });
 
+  console.log(`[AgentDispatcher] Found ${agents.length} active agents with execUrl`);
+  
   if (agents.length === 0) {
+    console.warn(`[AgentDispatcher] No active agents with execUrl found. Task ${task.id} will not be dispatched to any agents.`);
+    console.warn(`[AgentDispatcher] Make sure agents are registered with execUrl and status is ACTIVE`);
     return [];
   }
 
   // Dispatch to all agents in parallel
   const results: DispatchResult[] = [];
+  
   const dispatchPromises = agents.map(async (agent) => {
+    console.log(`[AgentDispatcher] Dispatching to agent: ${agent.name} (${agent.id}) at ${agent.execUrl}`);
+    
+    // Decrypt the agent's unique API token for signing
+    let apiToken: string;
+    try {
+      if (agent.apiTokenEncrypted) {
+        apiToken = decryptApiToken(agent.apiTokenEncrypted);
+        console.log(`[AgentDispatcher] Using agent's unique API token for signing`);
+      } else {
+        // Fallback for agents created before encryption was added
+        const signingKey = process.env.AGENT_TOKEN_ENCRYPTION_KEY;
+        if (signingKey) {
+          // Try to use legacy approach with env key
+          apiToken = signingKey + agent.id; // Use env key + agent ID as fallback
+          console.warn(`[AgentDispatcher] Agent ${agent.id} has no encrypted token, using legacy fallback`);
+        } else {
+          throw new Error('No encrypted token and no fallback key available');
+        }
+      }
+    } catch (err) {
+      console.error(`[AgentDispatcher] Failed to decrypt token for agent ${agent.id}:`, err);
+      return {
+        agentId: agent.id,
+        agentName: agent.name,
+        status: 'FAILED' as const,
+        error: 'Failed to get signing token for agent',
+      };
+    }
+    
     // Create dispatch record
     const dispatch = await db.agentDispatch.create({
       data: {
@@ -316,11 +353,6 @@ export async function dispatchNewTask(task: {
         status: 'PENDING',
       },
     });
-
-    // We need the actual API token for signing, but we only have the hash
-    // For now, we'll use a placeholder - in production, tokens should be stored securely
-    // or we use a different signing mechanism
-    const apiToken = process.env.AGENT_SIGNING_KEY || 'default-signing-key';
     
     const result = await dispatchToAgent(
       agent,

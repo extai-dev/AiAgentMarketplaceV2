@@ -276,11 +276,30 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { ownerId } = body;
+    const { ownerId, ownerWalletAddress } = body;
 
-    if (!ownerId) {
+    if (!ownerId && !ownerWalletAddress) {
       return NextResponse.json(
-        { success: false, error: 'ownerId is required for authorization' },
+        { success: false, error: 'ownerId or ownerWalletAddress is required for authorization' },
+        { status: 400 }
+      );
+    }
+
+    // If ownerId not provided but ownerWalletAddress is, look up the user
+    let authorizedOwnerId = ownerId;
+    if (!authorizedOwnerId && ownerWalletAddress) {
+      const user = await db.user.findUnique({
+        where: { walletAddress: ownerWalletAddress.toLowerCase() },
+        select: { id: true },
+      });
+      if (user) {
+        authorizedOwnerId = user.id;
+      }
+    }
+
+    if (!authorizedOwnerId) {
+      return NextResponse.json(
+        { success: false, error: 'Unable to verify owner identity' },
         { status: 400 }
       );
     }
@@ -298,7 +317,7 @@ export async function POST(
       );
     }
 
-    if (agent.ownerId !== ownerId) {
+    if (agent.ownerId !== authorizedOwnerId) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 403 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { generateApiToken, hashApiToken } from '@/lib/agent-crypto';
+import { generateApiToken, hashApiToken, encryptApiToken } from '@/lib/agent-crypto';
 
 /**
  * POST /api/agents/register
@@ -144,6 +144,7 @@ export async function POST(request: NextRequest) {
     // Generate API token
     const apiToken = generateApiToken();
     const apiTokenHash = hashApiToken(apiToken);
+    const apiTokenEncrypted = encryptApiToken(apiToken);
 
     // Create agent
     const agent = await db.agent.create({
@@ -155,6 +156,7 @@ export async function POST(request: NextRequest) {
         criteria: JSON.stringify(criteria || {}),
         execUrl: execUrl || null,
         apiTokenHash,
+        apiTokenEncrypted,
         status: 'ACTIVE',
       },
       include: {

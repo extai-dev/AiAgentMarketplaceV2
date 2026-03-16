@@ -18,6 +18,7 @@ import axios from "axios";
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // ===== CONFIGURATION =====
 const CONFIG = {
@@ -132,6 +133,7 @@ function evaluateTask(task) {
       text.includes(kw.toLowerCase()),
     );
     if (!hasKeyword) {
+      console.log(`Task ${task.id} does not match keywords: ${criteria.keywords.join(', ')}`);
       reasons.push("No matching keywords");
     }
   }
@@ -270,15 +272,18 @@ async function registerAgent() {
     console.log("No existing agent found, proceeding with registration...");
 
     // Agent doesn't exist, register new one
-    const response = await axios.post(`${CONFIG.MARKETPLACE_URL}/api/agents/register`, {
-      name: CONFIG.AGENT_NAME,
-      description: CONFIG.AGENT_DESCRIPTION,
-      walletAddress: CONFIG.AGENT_WALLET,
-      ownerId: ownerId,
-      execUrl: `http://localhost:${CONFIG.PORT}/task`,
-      criteria: CONFIG.CRITERIA,
-    });
-    
+    const response = await axios.post(
+      `${CONFIG.MARKETPLACE_URL}/api/agents/register`,
+      {
+        name: CONFIG.AGENT_NAME,
+        description: CONFIG.AGENT_DESCRIPTION,
+        walletAddress: CONFIG.AGENT_WALLET,
+        ownerId: ownerId,
+        execUrl: `http://localhost:${CONFIG.PORT}/task`,
+        criteria: CONFIG.CRITERIA,
+      },
+    );
+
     const data = response.data.data;
     apiToken = data.apiToken;
     agentId = data.id;
@@ -289,7 +294,9 @@ async function registerAgent() {
     console.log(`API Token: ${apiToken.substring(0, 20)}...`);
     console.log(`Wallet: ${CONFIG.AGENT_WALLET}`);
     console.log(`Criteria:`, CONFIG.CRITERIA);
-    console.log(`apiToken: ${apiToken ? apiToken.substring(0, 20) + "..." : "No API token"}`);
+    console.log(
+      `apiToken: ${apiToken ? apiToken.substring(0, 20) + "..." : "No API token"}`,
+    );
     console.log("=====================================");
 
     return true;
@@ -314,9 +321,16 @@ async function registerAgent() {
 /**
  * Webhook endpoint for receiving task notifications
  */
-app.post('/task', async (req, res) => {
-  console.log('\n=== Received Task Notification ===');
-  
+app.post("/task", async (req, res) => {
+  // Log EVERYTHING immediately
+  console.log("\n=== 🔥 TASK ENDPOINT HIT ===");
+  console.log("Time:", new Date().toISOString());
+  console.log("Headers:", JSON.stringify(req.headers, null, 2));
+  console.log("Body:", JSON.stringify(req.body, null, 2));
+  console.log("Method:", req.method);
+  console.log("URL:", req.url);
+  console.log("============================\n");
+
   // Immediately acknowledge receipt
   res.json({ status: "received", message: "Notification acknowledged" });
 
@@ -430,6 +444,9 @@ app.post('/task', async (req, res) => {
   const bidAmount = calculateBidAmount(task);
 
   try {
+    console.log(
+      `Submitting bid for task ${task.id} with amount ${bidAmount}...`,
+    );
     const response = await marketplaceApi("POST", "/api/agents/callback", {
       type: "BID_RESPONSE",
       taskId: task.id,
@@ -764,4 +781,11 @@ app.listen(CONFIG.PORT, async () => {
   setInterval(checkBidStatuses, 30000);
 
   setInterval(checkForAcceptedBids, 15000); // Check every 15 seconds
+});
+
+// Log ALL incoming requests
+app.use((req, res, next) => {
+  console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  console.log("Headers:", req.headers);
+  next();
 });
