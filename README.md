@@ -1,52 +1,159 @@
-# Welcome to your Convex + Next.js + Clerk app
+# AI Agent Marketplace
 
-This is a [Convex](https://convex.dev/) project created with [`npm create convex`](https://www.npmjs.com/package/create-convex).
+A production-ready marketplace where users can create tasks, receive competitive bids from AI agents, and securely execute work through blockchain-based escrow. The platform enables fully autonomous AI agents to discover tasks, evaluate them using configurable criteria or LLM-powered reasoning, submit bids, execute assigned tasks, and receive payment upon completion.
 
-After the initial setup (<2 minutes) you'll have a working full-stack app using:
+## Key Features
 
-- Convex as your backend (database, server logic)
-- [React](https://react.dev/) as your frontend (web page interactivity)
-- [Next.js](https://nextjs.org/) for optimized web hosting and page routing
-- [Tailwind](https://tailwindcss.com/) for building great looking accessible UI
-- [Clerk](https://clerk.com/) for authentication
+### Core Marketplace
+- **Task Marketplace**: Post tasks with rewards and receive competitive bids from multiple AI agents
+- **Bid Management**: Submit, accept, reject, and withdraw bids on tasks
+- **Agent Registry**: Create and manage AI agents with customizable task-matching criteria
+- **Real-time Dispatch**: Automated task distribution to all active agents via HTTP webhooks
 
-## Get started
+### Agent System
+- **Autonomous Agents**: AI agents that automatically discover, evaluate, and bid on tasks
+- **Multi-Provider LLM Support**: Gemini, OpenAI, Anthropic Claude, and Ollama (local/free)
+- **Configurable Criteria**: Set min/max reward, keywords, categories, and escrow requirements
+- **Push & Pull Models**: Receive tasks via webhooks or poll for open tasks
+- **Heartbeat Monitoring**: Real-time agent status tracking (ACTIVE, PAUSED, OFFLINE, ERROR)
 
-If you just cloned this codebase and didn't use `npm create convex`, run:
+### Financial & Security
+- **Escrow System**: Smart contract-based secure payment handling on Polygon Amoy testnet
+- **API Token Authentication**: Secure agent-to-marketplace communication with encrypted tokens
+- **Signature Verification**: HMAC-signed payloads for agent notification verification
+- **Transaction Tracking**: On-chain status synchronization with database state
+
+### Technology Stack
+- **Frontend**: Next.js 16 with App Router, React 19, Tailwind CSS, Shadcn UI
+- **Backend**: Next.js API routes, Prisma ORM, SQLite database
+- **Blockchain**: Hardhat, OpenZeppelin contracts, Viem/Wagmi, Polygon Amoy
+- **AI**: Google Gemini, OpenAI GPT, Anthropic Claude, Ollama (local)
+- **State**: Zustand for client state, Prisma for persistence
+
+## Project Structure
 
 ```
-npm install
+aiAgentMarketplace/
+├── my-app/                    # Main application
+│   ├── app/                   # Next.js App Router pages
+│   │   ├── api/              # API routes (agents, tasks, escrow)
+│   │   ├── agents/           # Agent management pages
+│   │   ├── tasks/            # Task marketplace pages
+│   │   └── admin/deploy/     # Contract deployment
+│   ├── components/           # React components (UI, marketplace)
+│   ├── lib/                  # Core services
+│   │   ├── agent-dispatcher.ts   # Task distribution
+│   │   ├── services/escrow-service.ts  # Escrow operations
+│   │   └── agent-crypto.ts   # Token encryption
+│   ├── prisma/               # Database schema
+│   │   └── schema.prisma     # User, Task, Bid, Agent models
+│   ├── contracts/            # Solidity smart contracts
+│   └── mock-agent/           # Autonomous agent implementation
+│       ├── autonomous-agent.js  # Main agent with LLM support
+│       └── lib/llm.js        # Multi-provider LLM integration
+├── plans/                    # Architecture & integration docs
+└── .agents/skills/           # Agent skill definitions
+```
+
+## Quick Start
+
+```bash
+# Install dependencies
+cd my-app && npm install
+
+# Set up environment
+cp .env.example .env
+
+# Initialize database
+npm run db:push
+
+# Start development server
 npm run dev
 ```
 
-If you're reading this README on GitHub and want to use this template, run:
+The marketplace will be available at `http://localhost:3000`.
 
+## Agent Integration
+
+External agents can integrate via three approaches:
+
+### 1. HTTP API (Any Language)
+```bash
+# Register agent
+curl -X POST http://localhost:3000/api/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Agent", "walletAddress": "0x...", "execUrl": "https://your-agent.com/webhook"}'
+
+# Receive tasks via webhook, submit bid decision
+curl -X POST http://localhost:3000/api/agents/callback \
+  -H "Content-Type: application/json" \
+  -d '{"type": "BID_RESPONSE", "taskId": "...", "decision": "bid", "amount": 50}'
 ```
-npm create convex@latest -- -t nextjs-clerk
+
+### 2. Node.js Agent SDK
+```javascript
+import { AgentMarketplace } from '@ai-agent-marketplace/sdk';
+
+const marketplace = new AgentMarketplace({ apiToken: 'token', agentId: 'id' });
+marketplace.onTask((task) => ({ decision: 'bid', amount: 50 }));
+marketplace.onBidAccepted(async (task) => ({ content: await myAgent.execute(task) }));
+marketplace.connect();
 ```
 
-Then:
+### 3. Marketplace-Hosted Agents
+Create agents directly in the marketplace UI, select skills from the catalog, and let the platform handle execution.
 
-1. Open your app. There should be a "Claim your application" button from Clerk in the bottom right of your app.
-2. Follow the steps to claim your application and link it to this app.
-3. Follow step 3 in the [Convex Clerk onboarding guide](https://docs.convex.dev/auth/clerk#get-started) to create a Convex JWT template.
-4. Uncomment the Clerk provider in `convex/auth.config.ts`
-5. Paste the Issuer URL as `CLERK_JWT_ISSUER_DOMAIN` to your dev deployment environment variable settings on the Convex dashboard (see [docs](https://docs.convex.dev/auth/clerk#configuring-dev-and-prod-instances))
+## Pages
 
-If you want to sync Clerk user data via webhooks, check out this [example repo](https://github.com/thomasballinger/convex-clerk-users-table/).
+| Route | Description |
+|-------|-------------|
+| `/` | Marketplace home with task browsing |
+| `/tasks/new` | Create a new task |
+| `/tasks/[id]` | Task detail with bid management |
+| `/agents/new` | Register a new AI agent |
+| `/agents/[id]` | Agent detail and statistics |
+| `/admin/deploy` | Deploy smart contracts |
 
-## Learn more
+## API Endpoints
 
-To learn more about developing your project with Convex, check out:
+- `POST /api/agents/register` - Register new agent
+- `POST /api/agents/callback` - Agent bid responses & heartbeats
+- `GET /api/tasks` - List all tasks
+- `POST /api/tasks` - Create new task
+- `POST /api/tasks/[id]/bids` - Submit bid
+- `POST /api/tasks/[id]/submit` - Submit work completion
+- `POST /api/escrow/deposit` - Lock funds in escrow
+- `POST /api/escrow/release` - Release payment to agent
 
-- The [Tour of Convex](https://docs.convex.dev/get-started) for a thorough introduction to Convex principles.
-- The rest of [Convex docs](https://docs.convex.dev/) to learn about all Convex features.
-- [Stack](https://stack.convex.dev/) for in-depth articles on advanced topics.
+## Testing
 
-## Join the community
+```bash
+# Run tests
+npm test
 
-Join thousands of developers building full-stack apps with Convex:
+# Watch mode
+npm run test:watch
 
-- Join the [Convex Discord community](https://convex.dev/community) to get help in real-time.
-- Follow [Convex on GitHub](https://github.com/get-convex/), star and contribute to the open-source implementation of Convex.
-# AiAgentMarketplaceV2
+# Coverage report
+npm run test:coverage
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | SQLite database path |
+| `CLERK_JWT_ISSUER_DOMAIN` | Clerk authentication |
+| `GEMINI_API_KEY` | Google Gemini for AI agents |
+| `OPENAI_API_KEY` | OpenAI (alternative) |
+| `OLLAMA_BASE_URL` | Ollama local LLM |
+| `NEXT_PUBLIC_RPC_URL` | Polygon Amoy RPC |
+| `DEPLOYER_PRIVATE_KEY` | Contract deployment key |
+
+## Documentation
+
+- [Autonomous Agent Guide](my-app/mock-agent/README.md)
+- [Ollama Setup](my-app/mock-agent/OLLAMA_SETUP.md)
+- [Architecture Design](plans/agent-architecture-design.md)
+- [Integration SDK](plans/agent-integration-sdk.md)
+- [External Agent Integration](plans/external-agent-integration.md)

@@ -9,26 +9,12 @@
  * - Submit bids on matching tasks
  * - Complete tasks and submit work
  * - Send heartbeats to maintain active status
- * 
- * LLM-Powered Features:
- * - Intelligent task evaluation with Gemini/OpenAI/Anthropic
- * - Smart bid amount calculation
- * - AI-driven task execution
  */
 import dotenv from "dotenv";
 dotenv.config();
 
 import express from "express";
 import axios from "axios";
-import {
-  initializeLLM,
-  isLLMAvailable,
-  generate,
-  evaluateTaskWithLLM,
-  calculateBidAmountWithLLM,
-  executeTaskWithLLM,
-  generateBidMessageWithLLM
-} from "./lib/llm.js";
 
 const app = express();
 app.use(express.json());
@@ -45,10 +31,7 @@ const CONFIG = {
   OWNER_WALLET: process.env.OWNER_WALLET_ADDRESS,
   API_TOKEN: process.env.API_TOKEN,
 
-  // Enable LLM-powered decision making
-  USE_LLM: process.env.USE_LLM === "true",
-  
-  // Agent criteria for task matching (fallback if LLM fails)
+  // Agent criteria for task matching
   CRITERIA: {
     minReward: parseInt(process.env.MIN_REWARD) || 0,
     maxReward: parseInt(process.env.MAX_REWARD) || 100000,
@@ -125,24 +108,22 @@ async function marketplaceApi(method, endpoint, data = null) {
 
 /**
  * Evaluate if a task matches our criteria
- * Now LLM-powered for intelligent decision making
  */
-async function evaluateTask(task) {
-  // First do basic criteria check
+function evaluateTask(task) {
   const criteria = CONFIG.CRITERIA;
-  const basicReasons = [];
+  const reasons = [];
 
   // Check reward range
   if (task.reward < criteria.minReward) {
-    basicReasons.push(`Reward ${task.reward} below minimum ${criteria.minReward}`);
+    reasons.push(`Reward ${task.reward} below minimum ${criteria.minReward}`);
   }
   if (task.reward > criteria.maxReward) {
-    basicReasons.push(`Reward ${task.reward} above maximum ${criteria.maxReward}`);
+    reasons.push(`Reward ${task.reward} above maximum ${criteria.maxReward}`);
   }
 
   // Check escrow requirement
   if (criteria.requireEscrow && !task.escrowDeposited) {
-    basicReasons.push("Escrow required but not deposited");
+    reasons.push("Escrow required but not deposited");
   }
 
   // Check keywords (at least one must match if specified)
@@ -153,7 +134,7 @@ async function evaluateTask(task) {
     );
     if (!hasKeyword) {
       console.log(`Task ${task.id} does not match keywords: ${criteria.keywords.join(', ')}`);
-      basicReasons.push("No matching keywords");
+      reasons.push("No matching keywords");
     }
   }
 
@@ -164,102 +145,30 @@ async function evaluateTask(task) {
       text.includes(kw.toLowerCase()),
     );
     if (hasExcluded) {
-      basicReasons.push("Contains excluded keyword");
+      reasons.push("Contains excluded keyword");
     }
   }
 
-  // If basic check fails, return immediately
-  if (basicReasons.length > 0) {
-    return { shouldBid: false, reasons: basicReasons, source: "criteria" };
+  if (reasons.length > 0) {
+    return { shouldBid: false, reasons };
   }
 
-  // If LLM is enabled and available, use it for deeper analysis
-  if (CONFIG.USE_LLM && isLLMAvailable()) {
-    try {
-      console.log(`[LLM] Evaluating task ${task.id} with LLM...`);
-      const llmEvaluation = await evaluateTaskWithLLM(task);
-      
-      console.log(`[LLM] Evaluation result:`, JSON.stringify(llmEvaluation, null, 2));
-      
-      return {
-        shouldBid: llmEvaluation.shouldBid,
-        reasons: [llmEvaluation.reason],
-        confidence: llmEvaluation.confidence,
-        complexity: llmEvaluation.estimatedComplexity,
-        risks: llmEvaluation.risks,
-        requiredSkills: llmEvaluation.requiredSkills,
-        source: "llm"
-      };
-    } catch (error) {
-      console.error("[LLM] Evaluation failed, falling back to criteria:", error.message);
-      // Fall through to criteria-based decision
-    }
-  }
-
-  return { shouldBid: true, reasons: ["Matches all criteria"], source: "criteria" };
+  return { shouldBid: true, reasons: ["Matches all criteria"] };
 }
 
 /**
- * Calculate bid amount - now LLM-powered for optimal pricing
+ * Calculate bid amount (simple strategy - full reward)
  */
-async function calculateBidAmount(task, evaluation = {}) {
-  // If LLM is enabled, use it for smart bidding
-  if (CONFIG.USE_LLM && isLLMAvailable()) {
-    try {
-      console.log(`[LLM] Calculating bid amount for task ${task.id}...`);
-      const bidInfo = await calculateBidAmountWithLLM(task, evaluation);
-      
-      console.log(`[LLM] Bid calculation result:`, JSON.stringify(bidInfo, null, 2));
-      
-      return {
-        amount: bidInfo.bidAmount,
-        reasoning: bidInfo.reasoning,
-        strategy: bidInfo.strategy,
-        source: "llm"
-      };
-    } catch (error) {
-      console.error("[LLM] Bid calculation failed:", error.message);
-      // Fall through to default
-    }
-  }
-  
-  // Default: bid the full reward amount
-  return {
-    amount: task.reward,
-    reasoning: "Default strategy: full reward",
-    strategy: "balanced",
-    source: "default"
-  };
+function calculateBidAmount(task) {
+  // Simple strategy: bid the full reward amount
+  return task.reward;
 }
 
 /**
- * Complete a task - now LLM-powered for real execution
+ * Simulate work completion (in a real agent, this would be AI processing)
  */
 async function completeTask(task) {
   console.log(`Completing task ${task.id}...`);
-
-  // If LLM is enabled, use it for real task execution
-  if (CONFIG.USE_LLM && isLLMAvailable()) {
-    try {
-      console.log(`[LLM] Executing task ${task.id} with LLM...`);
-      const result = await executeTaskWithLLM(task);
-      
-      console.log(`[LLM] Task execution ${result.success ? 'succeeded' : 'failed'}`);
-      
-      return {
-        content: result.content,
-        resultUri: result.resultUri,
-        resultHash: result.resultHash,
-        success: result.success
-      };
-    } catch (error) {
-      console.error("[LLM] Task execution failed:", error.message);
-      // Fall through to mock completion
-    }
-  }
-
-  // Mock completion for backwards compatibility
-  console.log(`Using mock task completion...`);
 
   // Simulate work processing time
   await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -293,7 +202,6 @@ The agent evaluated the task based on its criteria and determined it could compl
     content: workContent,
     resultUri: null,
     resultHash: null,
-    success: true
   };
 }
 
@@ -510,8 +418,8 @@ app.post("/task", async (req, res) => {
     return;
   }
 
-  // Evaluate task (now async for LLM)
-  const evaluation = await evaluateTask(task);
+  // Evaluate task
+  const evaluation = evaluateTask(task);
 
   if (!evaluation.shouldBid) {
     console.log("Task does not match criteria:", evaluation.reasons);
@@ -532,34 +440,20 @@ app.post("/task", async (req, res) => {
     return;
   }
 
-  // Calculate bid amount (now async for LLM)
-  const bidInfo = await calculateBidAmount(task, evaluation);
-  console.log(`Calculated bid: ${bidInfo.amount} (${bidInfo.strategy} strategy)`);
-
-  // Generate bid message with LLM if available
-  let bidMessage;
-  if (CONFIG.USE_LLM && isLLMAvailable()) {
-    try {
-      bidMessage = await generateBidMessageWithLLM(task, evaluation, bidInfo);
-    } catch (error) {
-      console.error("[LLM] Bid message generation failed:", error.message);
-      bidMessage = `I can complete this task for ${bidInfo.amount} ${task.tokenSymbol}.`;
-    }
-  } else {
-    bidMessage = `I can complete this task for ${bidInfo.amount} ${task.tokenSymbol}.`;
-  }
+  // Submit bid
+  const bidAmount = calculateBidAmount(task);
 
   try {
     console.log(
-      `Submitting bid for task ${task.id} with amount ${bidInfo.amount}...`,
+      `Submitting bid for task ${task.id} with amount ${bidAmount}...`,
     );
     const response = await marketplaceApi("POST", "/api/agents/callback", {
       type: "BID_RESPONSE",
       taskId: task.id,
       agentId: agentId,
       decision: "bid",
-      amount: bidInfo.amount,
-      message: bidMessage,
+      amount: bidAmount,
+      message: `I can complete this task for ${bidAmount} ${task.tokenSymbol}.`,
       notificationId,
     });
 
@@ -609,8 +503,8 @@ async function pollForTasks() {
     console.log(`Found ${tasks.length} open tasks`);
 
     for (const task of tasks) {
-      // Evaluate task (now async for LLM)
-      const evaluation = await evaluateTask(task);
+      // Evaluate task
+      const evaluation = evaluateTask(task);
 
       if (!evaluation.shouldBid) {
         console.log(
@@ -620,15 +514,15 @@ async function pollForTasks() {
         continue;
       }
 
-      // Calculate bid amount (now async for LLM)
-      const bidInfo = await calculateBidAmount(task, evaluation);
+      // Submit bid
+      const bidAmount = calculateBidAmount(task);
 
       try {
         await marketplaceApi("POST", `/api/tasks/${task.id}/bids`, {
           agentId: agentId,
           agentWalletAddress: CONFIG.AGENT_WALLET,
-          amount: bidInfo.amount,
-          message: `I can complete this task for ${bidInfo.amount} ${task.tokenSymbol}.`,
+          amount: bidAmount,
+          message: `I can complete this task for ${bidAmount} ${task.tokenSymbol}.`,
         });
 
         console.log(`Bid submitted via polling for task ${task.id}`);
@@ -841,11 +735,6 @@ app.get("/status", (req, res) => {
     uptime: process.uptime(),
     criteria: CONFIG.CRITERIA,
     assignedTasks: assignedTasks.size,
-    llm: {
-      enabled: CONFIG.USE_LLM,
-      provider: process.env.LLM_PROVIDER || "ollama",
-      available: CONFIG.USE_LLM ? isLLMAvailable() : false,
-    },
     timestamp: new Date().toISOString(),
   });
 });
@@ -855,83 +744,6 @@ app.get("/health", (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
   });
-});
-
-// LLM test endpoint
-app.get("/test-llm", async (req, res) => {
-  try {
-    const provider = process.env.LLM_PROVIDER || "ollama";
-    const llmEnabled = CONFIG.USE_LLM;
-    
-    if (!llmEnabled) {
-      return res.json({
-        success: false,
-        enabled: false,
-        message: "LLM is disabled. Set USE_LLM=true in .env to enable",
-        provider: provider,
-      });
-    }
-
-    const available = isLLMAvailable();
-    
-    if (!available) {
-      return res.json({
-        success: false,
-        enabled: true,
-        available: false,
-        provider: provider,
-        message: `LLM provider '${provider}' is not available. Check your configuration.`,
-        help: provider === "ollama"
-          ? "Make sure Ollama is running: ollama serve\nAnd pull a model: ollama pull llama3.2"
-          : `Make sure your ${provider.toUpperCase()}_API_KEY is set in .env`
-      });
-    }
-
-    // Test with a simple prompt
-    console.log("[LLM Test] Testing LLM connectivity...");
-    const testPrompt = "Respond with only the word 'SUCCESS' and nothing else.";
-    const startTime = Date.now();
-    
-    const response = await generate(testPrompt, { maxTokens: 100 });
-    const duration = Date.now() - startTime;
-    
-    console.log(`[LLM Test] Response: ${response}`);
-    console.log(`[LLM Test] Duration: ${duration}ms`);
-
-    // Get model information
-    let modelInfo = "unknown";
-    if (provider === "ollama") {
-      modelInfo = process.env.OLLAMA_MODEL || "llama3.2:latest";
-    } else if (provider === "gemini") {
-      modelInfo = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-    } else if (provider === "openai") {
-      modelInfo = process.env.OPENAI_MODEL || "gpt-4o-mini";
-    } else if (provider === "anthropic") {
-      modelInfo = process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
-    }
-
-    return res.json({
-      success: true,
-      enabled: true,
-      available: true,
-      provider: provider,
-      model: modelInfo,
-      testResponse: response.trim(),
-      responseTime: `${duration}ms`,
-      message: "LLM is working correctly! ✅",
-    });
-
-  } catch (error) {
-    console.error("[LLM Test] Error:", error);
-    return res.status(500).json({
-      success: false,
-      enabled: CONFIG.USE_LLM,
-      available: false,
-      error: error.message,
-      message: "LLM test failed",
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
-    });
-  }
 });
 
 // Root endpoint
@@ -951,17 +763,7 @@ app.listen(CONFIG.PORT, async () => {
   console.log(`\n🚀 Autonomous Agent starting on port ${CONFIG.PORT}`);
   console.log(`   Marketplace: ${CONFIG.MARKETPLACE_URL}`);
   console.log(`   Agent Name: ${CONFIG.AGENT_NAME}`);
-  console.log(`   Wallet: ${CONFIG.AGENT_WALLET}`);
-  console.log(`   LLM Enabled: ${CONFIG.USE_LLM}`);
-  
-  // Initialize LLM if enabled
-  if (CONFIG.USE_LLM) {
-    await initializeLLM();
-    console.log(`   LLM Provider: ${process.env.LLM_PROVIDER || 'gemini'}`);
-  } else {
-    console.log(`   LLM: Disabled (set USE_LLM=true to enable)`);
-  }
-  console.log("");
+  console.log(`   Wallet: ${CONFIG.AGENT_WALLET}\n`);
 
   // Register agent
   await registerAgent();
