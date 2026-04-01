@@ -422,6 +422,303 @@ export async function dispatchNewTask(task: {
 }
 
 /**
+ * Payload sent to an agent participating in a multi-agent competitive round.
+ * Round 1 uses type MULTI_AGENT_ROUND; subsequent rounds use REVISION_REQUESTED.
+ */
+export interface MultiAgentRoundPayload {
+  type: 'MULTI_AGENT_ROUND' | 'REVISION_REQUESTED';
+  timestamp: string;
+  notificationId: string;
+  agent: {
+    id: string;
+    name: string;
+  };
+  task: {
+    id: string;
+    numericId: number;
+    title: string;
+    description: string;
+    reward: number;
+    tokenSymbol: string;
+    status: string;
+    deadline: string | null;
+    escrowDeposited: boolean;
+    creator: {
+      walletAddress: string;
+      name: string | null;
+    };
+  };
+  round: number;
+  taskExecutionId: string;
+  feedback?: string;
+  instruction: string;
+}
+
+/**
+ * Dispatch a multi-agent round notification to an agent.
+ * Used for both initial generation (round 1) and revision rounds.
+ * Agents must respond with { acknowledged: true } and later submit via /multi/submit.
+ */
+export async function dispatchMultiAgentRound(
+  agent: {
+    id: string;
+    name: string;
+    execUrl: string | null;
+    status: string;
+  },
+  task: {
+    id: string;
+    numericId: number;
+    title: string;
+    description: string;
+    reward: number;
+    tokenSymbol: string;
+    status: string;
+    deadline: Date | null;
+    escrowDeposited: boolean;
+    creator: { walletAddress: string; name: string | null };
+  },
+  executionId: string,
+  round: number,
+  apiToken: string,
+  feedback?: string,
+): Promise<{ success: boolean; error?: string }> {
+  if (!agent.execUrl) {
+    return { success: false, error: 'Agent has no execution URL configured' };
+  }
+
+  if (agent.status !== 'ACTIVE') {
+    return { success: false, error: `Agent status is ${agent.status}` };
+  }
+
+  const type: MultiAgentRoundPayload['type'] = round === 1 ? 'MULTI_AGENT_ROUND' : 'REVISION_REQUESTED';
+  const instruction =
+    round === 1
+      ? `Round ${round}: Submit your initial solution (V1). Use executionId "${executionId}" when calling /api/tasks/${task.id}/multi/submit.`
+      : `Round ${round}: Revise your submission based on the feedback provided. Use executionId "${executionId}" when calling /api/tasks/${task.id}/multi/submit.`;
+
+  const payload: MultiAgentRoundPayload = {
+    type,
+    timestamp: new Date().toISOString(),
+    notificationId: `multi-${agent.id}-${executionId}-r${round}-${Date.now()}`,
+    agent: { id: agent.id, name: agent.name },
+    task: {
+      id: task.id,
+      numericId: task.numericId,
+      title: task.title,
+      description: task.description,
+      reward: task.reward,
+      tokenSymbol: task.tokenSymbol,
+      status: task.status,
+      deadline: task.deadline ? task.deadline.toISOString() : null,
+      escrowDeposited: task.escrowDeposited,
+      creator: task.creator,
+    },
+    round,
+    taskExecutionId: executionId,
+    feedback,
+    instruction,
+  };
+
+  const signature = signPayload(payload, apiToken);
+
+  try {
+    const response = await fetch(agent.execUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Agent-ID': agent.id,
+        'X-Signature': signature,
+        'X-Notification-ID': payload.notificationId,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    const isTimeout = error.name === 'TimeoutError' || error.name === 'AbortError';
+    return {
+      success: false,
+      error: isTimeout ? 'Agent did not respond within 30 seconds' : (error.message || 'Unknown error'),
+    };
+  }
+}
+
+/**
+ * Payload sent to agent when a client requests a revision
+ */
+export interface RevisionNotificationPayload {
+  type: 'REVISION_REQUESTED';
+  timestamp: string;
+  notificationId: string;
+  agent: {
+    id: string;
+    name: string;
+  };
+  task: {
+    id: string;
+    numericId: number;
+    title: string;
+    description: string;
+    reward: number;
+    tokenSymbol: string;
+    status: string;
+    deadline: string | null;
+    escrowDeposited: boolean;
+    creator: {
+      walletAddress: string;
+      name: string | null;
+    };
+  };
+  feedback: string;
+  previousSubmissions: Array<{
+    version: number;
+    content: string;
+    feedback: string | null;
+  }>;
+}
+
+/**
+ * Dispatch a REVISION_REQUESTED notification to the task's assigned agent.
+ * Called by the review endpoint after a client requests changes on a submission.
+ * Errors are logged but do not propagate — callers should treat this as best-effort.
+ */
+export async function dispatchRevisionRequest(
+  task: {
+    id: string;
+    numericId: number;
+    title: string;
+    description: string;
+    reward: number;
+    tokenSymbol: string;
+    status: string;
+    deadline: Date | null;
+    escrowDeposited: boolean;
+    agentId: string | null;
+    creator: { walletAddress: string; name: string | null };
+  },
+  feedback: string,
+  allSubmissions: Array<{ version: number; content: string; feedback: string | null }>
+): Promise<void> {
+  if (!task.agentId) {
+    console.warn('[RevisionDispatch] Task has no assigned agent, skipping dispatch');
+    return;
+  }
+
+  const agent = await db.agent.findUnique({
+    where: { id: task.agentId },
+    select: { id: true, name: true, execUrl: true, apiTokenEncrypted: true, status: true },
+  });
+
+  if (!agent || !agent.execUrl) {
+    console.warn(`[RevisionDispatch] Agent ${task.agentId} has no execUrl, skipping`);
+    return;
+  }
+
+  // Decrypt agent token for payload signing
+  let apiToken: string;
+  try {
+    if (agent.apiTokenEncrypted) {
+      apiToken = decryptApiToken(agent.apiTokenEncrypted);
+    } else {
+      const fallbackKey = process.env.AGENT_TOKEN_ENCRYPTION_KEY;
+      if (!fallbackKey) throw new Error('No encrypted token and no fallback key available');
+      apiToken = fallbackKey + agent.id;
+      console.warn(`[RevisionDispatch] Agent ${agent.id} has no encrypted token, using legacy fallback`);
+    }
+  } catch (err) {
+    console.error('[RevisionDispatch] Failed to decrypt agent token:', err);
+    return;
+  }
+
+  const notificationId = `revision-${agent.id}-${task.id}-${Date.now()}`;
+
+  const payload: RevisionNotificationPayload = {
+    type: 'REVISION_REQUESTED',
+    timestamp: new Date().toISOString(),
+    notificationId,
+    agent: { id: agent.id, name: agent.name },
+    task: {
+      id: task.id,
+      numericId: task.numericId,
+      title: task.title,
+      description: task.description,
+      reward: task.reward,
+      tokenSymbol: task.tokenSymbol,
+      status: task.status,
+      deadline: task.deadline ? task.deadline.toISOString() : null,
+      escrowDeposited: task.escrowDeposited,
+      creator: task.creator,
+    },
+    feedback,
+    previousSubmissions: allSubmissions.map(s => ({
+      version: s.version,
+      content: s.content,
+      feedback: s.feedback,
+    })),
+  };
+
+  const signature = signPayload(payload, apiToken);
+
+  // Record the dispatch attempt
+  const dispatch = await db.agentDispatch.create({
+    data: { agentId: agent.id, taskId: task.id, status: 'PENDING' },
+  });
+
+  const startTime = Date.now();
+  try {
+    const response = await fetch(agent.execUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Agent-ID': agent.id,
+        'X-Signature': signature,
+        'X-Notification-ID': notificationId,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    const durationMs = Date.now() - startTime;
+    const dispatchStatus = response.ok ? 'SUCCESS' : 'FAILED';
+
+    await db.agentDispatch.update({
+      where: { id: dispatch.id },
+      data: { status: dispatchStatus, respondedAt: new Date(), durationMs },
+    });
+
+    await db.agentLog.create({
+      data: {
+        agentId: agent.id,
+        level: dispatchStatus === 'SUCCESS' ? 'INFO' : 'WARN',
+        action: 'REVISION_DISPATCHED',
+        taskId: task.id,
+        message: `Revision request dispatched: ${dispatchStatus}`,
+        metadata: JSON.stringify({ durationMs, feedback: feedback.substring(0, 200) }),
+      },
+    });
+
+    console.log(`[RevisionDispatch] Dispatch to agent ${agent.id}: ${dispatchStatus} (${durationMs}ms)`);
+  } catch (err: any) {
+    const durationMs = Date.now() - startTime;
+    const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError';
+    const dispatchStatus = isTimeout ? 'TIMEOUT' : 'FAILED';
+
+    await db.agentDispatch.update({
+      where: { id: dispatch.id },
+      data: { status: dispatchStatus, durationMs, errorMessage: err.message },
+    });
+
+    console.error(`[RevisionDispatch] Dispatch error (${dispatchStatus}):`, err.message);
+  }
+}
+
+/**
  * Process agent response and submit bid if decision is to bid
  */
 export async function processAgentResponse(

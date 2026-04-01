@@ -20,6 +20,42 @@ dotenv.config();
 
 import express from "express";
 import axios from "axios";
+
+// ===== CLI ARG PARSING =====
+// Support: node autonomous-agent.js --agent-id <id>
+// Or:      AGENT_ID=<id> node autonomous-agent.js
+function parseCliArgs() {
+  const args = process.argv.slice(2);
+  const result = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--agent-id" && args[i + 1]) {
+      result.agentId = args[i + 1];
+      i++;
+    } else if (args[i].startsWith("--agent-id=")) {
+      result.agentId = args[i].split("=")[1];
+    } else if (args[i] === "--api-token" && args[i + 1]) {
+      result.apiToken = args[i + 1];
+      i++;
+    } else if (args[i].startsWith("--api-token=")) {
+      result.apiToken = args[i].split("=")[1];
+    } else if (args[i] === "--port" && args[i + 1]) {
+      result.port = parseInt(args[i + 1]);
+      i++;
+    } else if (args[i].startsWith("--port=")) {
+      result.port = parseInt(args[i].split("=")[1]);
+    } else if (!args[i].startsWith("-") && !result.agentId) {
+      // Bare positional argument — treat as the agent ID
+      // Usage: node autonomous-agent.js <agent-id>
+      result.agentId = args[i];
+    }
+  }
+  return result;
+}
+
+const CLI_ARGS = parseCliArgs();
+const LOAD_AGENT_ID = CLI_ARGS.agentId || process.env.AGENT_ID || null;
+const CLI_API_TOKEN = CLI_ARGS.apiToken || null;
+const CLI_PORT = CLI_ARGS.port || null;
 import {
   initializeLLM,
   isLLMAvailable,
@@ -36,14 +72,14 @@ app.use(express.urlencoded({ extended: true }));
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-  PORT: process.env.PORT || 4000,
+  PORT: CLI_PORT || process.env.PORT || 4000,
   MARKETPLACE_URL: process.env.MARKETPLACE_URL || "http://localhost:3000",
   AGENT_NAME: process.env.AGENT_NAME || "Autonomous Task Agent",
   AGENT_DESCRIPTION:
     process.env.AGENT_DESCRIPTION || "AI agent for automated task completion",
   AGENT_WALLET: process.env.AGENT_WALLET_ADDRESS,
   OWNER_WALLET: process.env.OWNER_WALLET_ADDRESS,
-  API_TOKEN: process.env.API_TOKEN,
+  API_TOKEN: CLI_API_TOKEN || process.env.API_TOKEN,
 
   // Enable LLM-powered decision making
   USE_LLM: process.env.USE_LLM === "true",
@@ -71,15 +107,54 @@ const CONFIG = {
   HEARTBEAT_INTERVAL: parseInt(process.env.HEARTBEAT_INTERVAL) || 20000, // 20 seconds
 };
 
-// Validate required configuration
-if (!CONFIG.AGENT_WALLET) {
-  console.error("ERROR: AGENT_WALLET_ADDRESS environment variable is required");
-  process.exit(1);
+// Validate required configuration (skip wallet checks when loading agent from DB)
+if (!LOAD_AGENT_ID) {
+  if (!CONFIG.AGENT_WALLET) {
+    console.error("ERROR: AGENT_WALLET_ADDRESS environment variable is required");
+    process.exit(1);
+  }
+  if (!CONFIG.OWNER_WALLET) {
+    console.error("ERROR: OWNER_WALLET_ADDRESS environment variable is required");
+    process.exit(1);
+  }
 }
 
-if (!CONFIG.OWNER_WALLET) {
-  console.error("ERROR: OWNER_WALLET_ADDRESS environment variable is required");
-  process.exit(1);
+// ===== LOAD AGENT FROM DB =====
+
+/**
+ * Fetch an agent record from the marketplace DB and override CONFIG with its values.
+ * Called at startup when --agent-id (or AGENT_ID env var) is provided.
+ */
+async function loadAgentFromDb(id) {
+  console.log(`Loading agent config from DB for ID: ${id}`);
+  const response = await axios.get(
+    `${CONFIG.MARKETPLACE_URL}/api/agents/${id}`,
+  );
+
+  const agent = response.data?.data;
+  if (!agent) {
+    throw new Error(`Agent ${id} not found in DB`);
+  }
+
+  // Override CONFIG with values from DB
+  CONFIG.AGENT_NAME = agent.name || CONFIG.AGENT_NAME;
+  CONFIG.AGENT_DESCRIPTION = agent.description || CONFIG.AGENT_DESCRIPTION;
+  CONFIG.AGENT_WALLET = agent.walletAddress || CONFIG.AGENT_WALLET;
+
+  if (agent.criteria && typeof agent.criteria === "object") {
+    CONFIG.CRITERIA = {
+      ...CONFIG.CRITERIA,
+      ...agent.criteria,
+    };
+  }
+
+  console.log(`=== Loaded Agent from DB ===`);
+  console.log(`  Name:   ${CONFIG.AGENT_NAME}`);
+  console.log(`  Wallet: ${CONFIG.AGENT_WALLET}`);
+  console.log(`  Status: ${agent.status}`);
+  console.log(`===========================`);
+
+  return agent;
 }
 
 // ===== STATE =====
@@ -301,6 +376,51 @@ The agent evaluated the task based on its criteria and determined it could compl
 
 async function registerAgent() {
   try {
+    // If started with --agent-id, load config from DB and skip full registration
+    if (LOAD_AGENT_ID) {
+      const agent = await loadAgentFromDb(LOAD_AGENT_ID);
+      agentId = agent.id;
+      agentStatus = agent.status;
+      apiToken = CONFIG.API_TOKEN;
+
+      if (!apiToken) {
+        console.error("ERROR: API_TOKEN env var is required when using --agent-id");
+        process.exit(1);
+      }
+
+      // Get the owner user ID from the agent record if available
+      ownerUserId = agent.ownerId || null;
+
+      // Warn if another agent is already registered at the same execUrl — they would
+      // silently drop each other's task notifications (the /task handler checks agentId).
+      const myExecUrl = `http://localhost:${CONFIG.PORT}/task`;
+      try {
+        const allAgents = await axios.get(`${CONFIG.MARKETPLACE_URL}/api/agents`);
+        const conflict = (allAgents.data?.data || []).find(
+          (a) => a.execUrl === myExecUrl && a.id !== agentId && a.status === "ACTIVE"
+        );
+        if (conflict) {
+          console.warn(`\n⚠️  PORT CONFLICT DETECTED!`);
+          console.warn(`   Agent "${conflict.name}" (${conflict.id}) is already using ${myExecUrl}.`);
+          console.warn(`   Each agent must run on a unique port or task notifications will be dropped.`);
+          console.warn(`   Start with a different port: node autonomous-agent.js --agent-id ${agentId} --port 4001\n`);
+        }
+      } catch (_) { /* non-fatal */ }
+
+      // Sync execUrl so dispatch works on the current port
+      try {
+        await axios.put(`${CONFIG.MARKETPLACE_URL}/api/agents/${agentId}`, {
+          ownerId: ownerUserId,
+          execUrl: myExecUrl,
+        });
+        console.log(`execUrl synced to ${myExecUrl}`);
+      } catch (syncErr) {
+        console.warn("Failed to sync execUrl (non-fatal):", syncErr.message);
+      }
+
+      return true;
+    }
+
     console.log("Registering agent with marketplace...");
 
     // First, get or create the owner user and get their ID
@@ -352,6 +472,21 @@ async function registerAgent() {
           apiToken = CONFIG.API_TOKEN || "unknown";
           agentId = existingAgent.id;
           agentStatus = existingAgent.status;
+
+          // Sync current .env criteria and execUrl to DB so dispatch matching stays up-to-date
+          try {
+            await axios.put(
+              `${CONFIG.MARKETPLACE_URL}/api/agents/${existingAgent.id}`,
+              {
+                ownerId: ownerId,
+                criteria: CONFIG.CRITERIA,
+                execUrl: `http://localhost:${CONFIG.PORT}/task`,
+              },
+            );
+            console.log("Agent criteria and execUrl synced with .env values.");
+          } catch (syncErr) {
+            console.warn("Failed to sync agent criteria (non-fatal):", syncErr.message);
+          }
 
           return true;
         }
@@ -437,6 +572,12 @@ app.post("/task", async (req, res) => {
   console.log(`Task ID: ${task.id}, Title: ${task.title}`);
   console.log(`Reward: ${task.reward} ${task.tokenSymbol}`);
 
+  // Only process notifications addressed to this agent
+  if (agentInfo && agentInfo.id !== agentId) {
+    console.log(`Notification for agent ${agentInfo.id} (not us: ${agentId}), skipping.`);
+    return;
+  }
+
   // Check for duplicate notification
   if (processedNotifications.has(notificationId)) {
     console.log(
@@ -463,6 +604,93 @@ app.post("/task", async (req, res) => {
     return;
   }
 
+  // Handle revision request — re-execute task with client feedback
+  if (type === "REVISION_REQUESTED") {
+    const { feedback, previousSubmissions } = req.body;
+
+    console.log(`\n=== REVISION REQUESTED ===`);
+    console.log(`Task: ${task.id} — ${task.title}`);
+    console.log(`Feedback: ${feedback}`);
+    console.log(`Previous submissions: ${previousSubmissions?.length ?? 0}`);
+    console.log(`=========================\n`);
+
+    try {
+      let revisedContent;
+
+      if (CONFIG.USE_LLM && isLLMAvailable()) {
+        // Build structured revision prompt with full history
+        const historyText = (previousSubmissions || [])
+          .map(
+            (s) =>
+              `### Version ${s.version}\n${s.content}\n\n**Feedback:** ${s.feedback || "None"}`
+          )
+          .join("\n\n---\n\n");
+
+        const revisionPrompt = `You are re-working a previously submitted task based on client feedback.
+
+## Original Task
+**Title:** ${task.title}
+**Description:** ${task.description}
+
+## Submission History
+${historyText}
+
+## Client Feedback on Latest Submission
+${feedback}
+
+## Instructions
+Produce an improved version that fully addresses the client's feedback.
+Reference the history to avoid repeating prior mistakes.
+Return only the final deliverable content.`;
+
+        revisedContent = await generate(revisionPrompt, { maxTokens: 4000 });
+      } else {
+        // Mock revision: acknowledge feedback and build on previous content
+        const lastSubmission = (previousSubmissions || []).slice(-1)[0];
+        revisedContent = `# Revised Submission (Addressing Feedback)
+
+## Client Feedback
+${feedback}
+
+## Previous Work
+${lastSubmission ? lastSubmission.content : "No previous submission found."}
+
+## Revisions Made
+- Reviewed and addressed client feedback
+- Revised: ${new Date().toISOString()}
+- Agent: ${CONFIG.AGENT_NAME}`.trim();
+      }
+
+      // Submit new version via /submissions endpoint
+      const submitResponse = await marketplaceApi(
+        "POST",
+        `/api/tasks/${task.id}/submissions`,
+        {
+          agentId: agentId,
+          agentWalletAddress: CONFIG.AGENT_WALLET,
+          content: revisedContent,
+        }
+      );
+
+      console.log(
+        `Revised submission created! Version: ${submitResponse.data.data?.version}`
+      );
+
+      // Track as in-progress
+      assignedTasks.set(task.id, {
+        task,
+        startedAt: new Date(),
+        revision: true,
+      });
+    } catch (error) {
+      console.error(
+        `Failed to submit revision for task ${task.id}:`,
+        error.response?.data || error.message
+      );
+    }
+    return;
+  }
+
   // Handle bid accepted - execute the task!
   if (type === "BID_ACCEPTED") {
     console.log(`\n=== BID ACCEPTED! ===`);
@@ -485,18 +713,16 @@ app.post("/task", async (req, res) => {
       console.log(`Task completed, submitting work as ${agentId}...`);
       const submitResponse = await marketplaceApi(
         "POST",
-        `/api/tasks/${task.id}/submit`,
+        `/api/tasks/${task.id}/submissions`,
         {
           agentId: agentId,
           agentWalletAddress: CONFIG.AGENT_WALLET,
           content: result.content,
-          resultUri: result.resultUri,
-          resultHash: result.resultHash,
         },
       );
 
       console.log(`Work submitted successfully!`, submitResponse.data.message);
-      console.log(`Submission ID: ${submitResponse.data.data?.id}`);
+      console.log(`Submission ID: ${submitResponse.data.data?.id}, Version: ${submitResponse.data.data?.version}`);
 
       // Remove from assigned tasks after successful completion
       assignedTasks.delete(task.id);
@@ -950,6 +1176,9 @@ app.get("/", (req, res) => {
 app.listen(CONFIG.PORT, async () => {
   console.log(`\n🚀 Autonomous Agent starting on port ${CONFIG.PORT}`);
   console.log(`   Marketplace: ${CONFIG.MARKETPLACE_URL}`);
+  if (LOAD_AGENT_ID) {
+    console.log(`   Mode: Load from DB (agent-id: ${LOAD_AGENT_ID})`);
+  }
   console.log(`   Agent Name: ${CONFIG.AGENT_NAME}`);
   console.log(`   Wallet: ${CONFIG.AGENT_WALLET}`);
   console.log(`   LLM Enabled: ${CONFIG.USE_LLM}`);

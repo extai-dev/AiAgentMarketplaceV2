@@ -42,14 +42,22 @@ model Task {
   resultHash      String?
   deadline        DateTime?
   completedAt     DateTime?
+  
+  // Multi-agent configuration
+  multiAgentEnabled Boolean       @default(false)
+  minAgentsRequired Int            @default(2)
+  maxAgentsAllowed  Int            @default(5)
+  
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   dispatches      AgentDispatch[]
   bids            Bid[]
   workSubmission  WorkSubmission?
   escrow          Escrow?
+  submissions     Submission[]
   agent           Agent?          @relation("AgentTasks", fields: [agentId], references: [id])
   creator         User            @relation("CreatorTasks", fields: [creatorId], references: [id])
+  taskExecution   TaskExecution?
 }
 
 model Bid {
@@ -80,6 +88,10 @@ model Agent {
   apiTokenHash    String?         // Hash for verification (one-way)
   apiTokenEncrypted String?       // Encrypted token for signing notifications (can be decrypted)
   status          AgentStatus     @default(ACTIVE)
+  
+  // Multi-agent specific
+  minCompetitionScore Int         @default(60)  // Min score to participate in competitions
+  
   lastSeen        DateTime?
   lastError       String?
   totalDispatches Int             @default(0)
@@ -95,6 +107,9 @@ model Agent {
   submittedByBids Bid[]           @relation("BidSubmittedBy")
   assignedTasks   Task[]          @relation("AgentTasks")
   workSubmissions WorkSubmission[]
+  submissions     Submission[]
+  participations  AgentParticipation[]
+  evaluations     Evaluation[]
 
   @@index([ownerId])
   @@index([status])
@@ -138,6 +153,7 @@ model AgentLog {
 enum TaskStatus {
   OPEN
   IN_PROGRESS
+  IN_REVIEW
   VALIDATING
   COMPLETED
   DISPUTED
@@ -220,4 +236,174 @@ model Escrow {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   task        Task         @relation(fields: [taskId], references: [id])
+}
+
+enum RevisionStatus {
+  SUBMITTED
+  REVISION_REQUESTED
+  APPROVED
+}
+
+model Submission {
+  id        String         @id @default(cuid())
+  taskId    String
+  agentId   String
+  version   Int
+  content   String
+  files     String?
+  status    RevisionStatus @default(SUBMITTED)
+  feedback  String?
+  createdAt DateTime       @default(now())
+
+  task              Task               @relation(fields: [taskId], references: [id])
+  agent             Agent              @relation(fields: [agentId], references: [id])
+  taskExecution     TaskExecution?    @relation(fields: [taskExecutionId], references: [id])
+  taskExecutionId  String?
+  evaluations      Evaluation[]
+
+  @@index([taskId, version])
+  @@index([agentId])
+  @@index([taskExecutionId])
+}
+
+// =============================================
+// MULTI-AGENT COMPETITIVE REFINEMENT SYSTEM
+// =============================================
+
+enum ExecutionStatus {
+  PENDING           // Waiting to start
+  AGENTS_GENERATING // Agents creating V1 submissions
+  EVALUATING        // Judge evaluating submissions
+  REVISING          // Agents receiving feedback, creating V2+
+  COMPLETED         // Final selection done
+  FAILED            // Something went wrong
+}
+
+enum SelectionMode {
+  WINNER_TAKE_ALL  // Single best agent wins
+  MERGED_OUTPUT    // Judge merges best parts
+  SPLIT_PAYMENT    // Multiple agents get paid
+}
+
+model TaskExecution {
+  id                String          @id @default(cuid())
+  taskId            String          @unique
+  status            ExecutionStatus @default(PENDING)
+  currentRound      Int             @default(1)         // V1, V2, V3...
+  maxRounds         Int             @default(3)         // Max iterations
+  minScoreThreshold Int             @default(70)        // Early stop if reached
+  selectionMode     SelectionMode   @default(WINNER_TAKE_ALL)
+  
+  // Judge configuration
+  judgeModel        String          @default("gemini-2.0-flash")
+  judgeProvider     String          @default("gemini")
+  
+  // Cost tracking
+  totalCost         Float           @default(0)
+  totalTokens       Int             @default(0)
+  
+  // Result
+  winnerAgentId     String?
+  mergedOutput      String?
+  
+  // Timestamps
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  task              Task            @relation(fields: [taskId], references: [id])
+  participations    AgentParticipation[]
+  submissions       Submission[]
+  evaluations       Evaluation[]
+
+  @@index([taskId])
+  @@index([status])
+}
+
+enum ParticipationStatus {
+  INVITED           // Agent invited but not started
+  GENERATING        // Creating submission for current round
+  WAITING_EVAL      // Waiting for judge evaluation
+  REVISING          // Received feedback, working on next version
+  ELIMINATED        // Score too low, removed from competition
+  COMPLETED         // Finished all rounds or selected as winner
+}
+
+model AgentParticipation {
+  id                String              @id @default(cuid())
+  taskExecutionId   String
+  agentId           String
+  status            ParticipationStatus @default(INVITED)
+  
+  // Round tracking
+  currentRound      Int                 @default(1)
+  bestScore         Int?
+  totalSubmissions  Int                 @default(0)
+  
+  // Scoring history per round
+  scoresJson        String              @default("[]") // [{"round": 1, "score": 85, "dimensions": {...}}]
+  
+  // Financial
+  rewardClaimed     Float?
+  rewardPercent     Float?
+  
+  // Timestamps
+  invitedAt         DateTime            @default(now())
+  lastActiveAt      DateTime?
+  eliminatedAt      DateTime?
+  completedAt       DateTime?
+
+  taskExecution     TaskExecution       @relation(fields: [taskExecutionId], references: [id])
+  agent             Agent                @relation(fields: [agentId], references: [id])
+
+  @@unique([taskExecutionId, agentId])
+  @@index([taskExecutionId])
+  @@index([agentId])
+  @@index([status])
+}
+
+enum EvaluationStatus {
+  PENDING           // Waiting to be evaluated
+  IN_PROGRESS       // Judge currently evaluating
+  COMPLETED         // Evaluation done
+  FAILED            // Judge failed
+}
+
+model Evaluation {
+  id                String            @id @default(cuid())
+  taskExecutionId   String
+  round             Int               // V1, V2, V3...
+  
+  submissionId      String
+  agentId           String
+  
+  status            EvaluationStatus  @default(PENDING)
+  
+  // Judge scores
+  overallScore      Int?              // 0-100
+  dimensionsJson    String?           // {"relevance": 85, "completeness": 90, ...}
+  feedback          String?           // Natural language feedback
+  
+  // Judge decision
+  isBestInRound     Boolean           @default(false)
+  shouldContinue   Boolean           @default(true)
+  eliminationReason String?
+  
+  // Model/cost tracking
+  judgeModel        String?
+  tokensUsed        Int?
+  costUsd           Float?
+  
+  // Timestamps
+  evaluatedAt       DateTime?
+  createdAt         DateTime          @default(now())
+
+  taskExecution     TaskExecution     @relation(fields: [taskExecutionId], references: [id])
+  submission        Submission        @relation(fields: [submissionId], references: [id])
+  agent             Agent              @relation(fields: [agentId], references: [id])
+
+  @@unique([taskExecutionId, round, submissionId])
+  @@index([taskExecutionId, round])
+  @@index([agentId])
 }

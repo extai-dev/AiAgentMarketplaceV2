@@ -63,6 +63,13 @@ export async function POST(request: NextRequest) {
       case 'HEARTBEAT':
         return await handleHeartbeat(agentId, body);
       
+      // Multi-agent callback types
+      case 'MULTI_AGENT_SUBMISSION':
+        return await handleMultiAgentSubmission(agentId, body);
+      
+      case 'MULTI_AGENT_REVISION':
+        return await handleMultiAgentRevision(agentId, body);
+      
       default:
         return NextResponse.json(
           { success: false, error: `Unknown callback type: ${type}` },
@@ -326,4 +333,105 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Handle multi-agent submission from an agent
+ */
+async function handleMultiAgentSubmission(agentId: string, body: any) {
+  const { taskExecutionId, taskId, content, round } = body;
+
+  if (!taskExecutionId || !content) {
+    return NextResponse.json(
+      { success: false, error: 'taskExecutionId and content are required' },
+      { status: 400 }
+    );
+  }
+
+  // Verify agent is part of this execution
+  const participation = await db.agentParticipation.findFirst({
+    where: { taskExecutionId, agentId },
+  });
+
+  if (!participation) {
+    return NextResponse.json(
+      { success: false, error: 'Agent is not part of this execution' },
+      { status: 403 }
+    );
+  }
+
+  // Submit via orchestrator
+  const { submitMultiAgentSubmission } = await import('@/lib/services/multi-agent-orchestrator');
+  const result = await submitMultiAgentSubmission({
+    executionId: taskExecutionId,
+    agentId,
+    content,
+  });
+
+  if (!result.success) {
+    return NextResponse.json(
+      { success: false, error: result.error },
+      { status: 400 }
+    );
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      submissionId: result.submissionId,
+      round: participation.currentRound,
+    },
+    message: 'Multi-agent submission recorded',
+  });
+}
+
+/**
+ * Handle multi-agent revision request response
+ */
+async function handleMultiAgentRevision(agentId: string, body: any) {
+  const { taskExecutionId, taskId, content, feedback, round } = body;
+
+  if (!taskExecutionId || !content) {
+    return NextResponse.json(
+      { success: false, error: 'taskExecutionId and content are required' },
+      { status: 400 }
+    );
+  }
+
+  // Verify agent is part of this execution
+  const participation = await db.agentParticipation.findFirst({
+    where: { taskExecutionId, agentId },
+  });
+
+  if (!participation) {
+    return NextResponse.json(
+      { success: false, error: 'Agent is not part of this execution' },
+      { status: 403 }
+    );
+  }
+
+  // Submit revision via orchestrator
+  const { submitMultiAgentSubmission } = await import('@/lib/services/multi-agent-orchestrator');
+  const result = await submitMultiAgentSubmission({
+    executionId: taskExecutionId,
+    agentId,
+    content,
+  });
+
+  if (!result.success) {
+    return NextResponse.json(
+      { success: false, error: result.error },
+      { status: 400 }
+    );
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      submissionId: result.submissionId,
+      round: participation.currentRound,
+      feedback: feedback || 'Revision submitted',
+    },
+    message: 'Revision submitted successfully',
+  });
 }

@@ -233,6 +233,42 @@ export async function releaseEscrowFunds(params: { escrowId: string; txHash?: st
 }
 
 /**
+ * Split escrow on max-revision failure.
+ * Agent receives agentPercent % of the locked amount; creator is owed the remainder.
+ * The DB marks the escrow as RELEASED (settled). Split details are returned for logging.
+ */
+export async function splitEscrowFunds(params: {
+  taskId: string;
+  agentPercent: number;
+  reason?: string;
+}): Promise<{ success: boolean; agentAmount?: number; creatorRefundAmount?: number; error?: string }> {
+  try {
+    const escrow = await db.escrow.findUnique({ where: { taskId: params.taskId } });
+    if (!escrow) return { success: false, error: 'Escrow not found' };
+    if (escrow.status !== EscrowStatus.LOCKED) {
+      return { success: false, error: `Escrow is not locked (status: ${escrow.status})` };
+    }
+
+    const agentAmount = parseFloat((escrow.amount * params.agentPercent / 100).toFixed(4));
+    const creatorRefundAmount = parseFloat((escrow.amount - agentAmount).toFixed(4));
+
+    await db.escrow.update({
+      where: { id: escrow.id },
+      data: { status: EscrowStatus.RELEASED, releasedAt: new Date() },
+    });
+
+    console.log(
+      `[EscrowService] Split escrow ${escrow.id}: agent=${agentAmount}, creator_refund=${creatorRefundAmount}. Reason: ${params.reason ?? 'n/a'}`
+    );
+
+    return { success: true, agentAmount, creatorRefundAmount };
+  } catch (error) {
+    console.error('Error splitting escrow funds:', error);
+    return { success: false, error: 'Failed to split escrow funds' };
+  }
+}
+
+/**
  * Lock/Deposit escrow funds - creates on-chain deposit and updates database
  */
 export async function lockEscrowFunds(params: { taskId: string; amount: string; txHash?: string; onChainId?: number }) {

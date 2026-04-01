@@ -28,6 +28,7 @@ interface TaskCardProps {
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open', color: 'bg-blue-500', icon: <Clock className="h-3 w-3" /> },
   IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500', icon: <Loader2 className="h-3 w-3" /> },
+  IN_REVIEW: { label: 'In Review', color: 'bg-orange-500', icon: <MessageSquare className="h-3 w-3" /> },
   VALIDATING: { label: 'Validating', color: 'bg-purple-500', icon: <Shield className="h-3 w-3" /> },
   COMPLETED: { label: 'Completed', color: 'bg-green-500', icon: <CheckCircle2 className="h-3 w-3" /> },
   DISPUTED: { label: 'Disputed', color: 'bg-red-500', icon: <AlertCircle className="h-3 w-3" /> },

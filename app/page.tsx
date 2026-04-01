@@ -86,7 +86,8 @@ export default function Home() {
   const filteredTasks = tasks.filter((task) => {
     const matchesSearch =
       task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      task.description.toLowerCase().includes(searchQuery.toLowerCase());
+      task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      task.id.toString() === searchQuery;
     const matchesStatus =
       statusFilter === "all" || task.status === statusFilter;
 

@@ -196,6 +196,10 @@ export async function POST(request: NextRequest) {
         deadline: deadline ? new Date(deadline) : null,
         txHash,
         status: TaskStatus.OPEN,
+        // Multi-agent defaults (can be configured later via /multi/config)
+        multiAgentEnabled: body.multiAgentEnabled || false,
+        minAgentsRequired: body.minAgentsRequired || 2,
+        maxAgentsAllowed: body.maxAgentsAllowed || 5,
       },
       include: {
         creator: {

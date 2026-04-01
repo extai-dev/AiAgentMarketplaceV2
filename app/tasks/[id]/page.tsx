@@ -41,6 +41,7 @@ import {
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open for Bids', color: 'bg-blue-500', icon: <Clock className="h-4 w-4" /> },
   IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-500', icon: <Loader2 className="h-4 w-4" /> },
+  IN_REVIEW: { label: 'In Review', color: 'bg-orange-500', icon: <FileText className="h-4 w-4" /> },
   VALIDATING: { label: 'Validating', color: 'bg-purple-500', icon: <Shield className="h-4 w-4" /> },
   COMPLETED: { label: 'Completed', color: 'bg-green-500', icon: <CheckCircle2 className="h-4 w-4" /> },
   DISPUTED: { label: 'Disputed', color: 'bg-red-500', icon: <AlertCircle className="h-4 w-4" /> },
@@ -62,17 +63,21 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [bids, setBids] = useState<Bid[]>([]);
   const [workSubmission, setWorkSubmission] = useState<any>(null);
+  const [submissions, setSubmissions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [txHash, setTxHash] = useState<Address | null>(null);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isSubmittingWork, setIsSubmittingWork] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
-  
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [revisionFeedback, setRevisionFeedback] = useState('');
+  const [showRevisionInput, setShowRevisionInput] = useState(false);
+
   // Work submission form state
   const [workContent, setWorkContent] = useState('');
   const [resultUri, setResultUri] = useState('');
-  
+
   // Validation form state
   const [validationScore, setValidationScore] = useState(100);
   const [validationComments, setValidationComments] = useState('');
@@ -105,7 +110,10 @@ export default function TaskDetailPage() {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const taskResponse = await fetch(`/api/tasks/${taskId}`);
+        const [taskResponse, submissionsResponse] = await Promise.all([
+          fetch(`/api/tasks/${taskId}`),
+          fetch(`/api/tasks/${taskId}/submissions`),
+        ]);
         const taskData = await taskResponse.json();
         if (taskData.success) {
           setTask(taskData.data);
@@ -121,6 +129,10 @@ export default function TaskDetailPage() {
             variant: 'destructive',
           });
           router.push('/');
+        }
+        const submissionsData = await submissionsResponse.json();
+        if (submissionsData.success) {
+          setSubmissions(submissionsData.data || []);
         }
       } catch (error) {
         console.error('Failed to fetch task:', error);
@@ -141,17 +153,23 @@ export default function TaskDetailPage() {
 
   const refreshTask = async () => {
     try {
-      const response = await fetch(`/api/tasks/${taskId}`);
-      const data = await response.json();
+      const [taskRes, submissionsRes] = await Promise.all([
+        fetch(`/api/tasks/${taskId}`),
+        fetch(`/api/tasks/${taskId}/submissions`),
+      ]);
+      const data = await taskRes.json();
       if (data.success) {
         setTask(data.data);
         setBids(data.data.bids || []);
-        // Also refresh work submission
         if (data.data.workSubmission) {
           setWorkSubmission(data.data.workSubmission);
         } else {
           setWorkSubmission(null);
         }
+      }
+      const submissionsData = await submissionsRes.json();
+      if (submissionsData.success) {
+        setSubmissions(submissionsData.data || []);
       }
     } catch (error) {
       console.error('Failed to refresh task:', error);
@@ -488,6 +506,45 @@ export default function TaskDetailPage() {
     }
   };
 
+  // Review Submission - approve or request revision
+  const handleReviewSubmission = async (action: 'approve' | 'revise') => {
+    const latestSubmission = submissions.filter(s => s.status === 'SUBMITTED').slice(-1)[0];
+    if (!latestSubmission || !isCreator) return;
+
+    if (action === 'revise' && !revisionFeedback.trim()) {
+      toast({ title: 'Feedback required', description: 'Please enter revision feedback.', variant: 'destructive' });
+      return;
+    }
+
+    setIsReviewing(true);
+    try {
+      const response = await fetch(`/api/submissions/${latestSubmission.id}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, feedback: revisionFeedback || undefined }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        toast({
+          title: action === 'approve' ? 'Submission Approved!' : 'Revision Requested',
+          description: action === 'approve'
+            ? 'Task completed and escrow released.'
+            : 'Agent has been notified to revise.',
+        });
+        setRevisionFeedback('');
+        setShowRevisionInput(false);
+        refreshTask();
+      } else {
+        throw new Error(result.error || 'Failed to review submission');
+      }
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsReviewing(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -726,8 +783,24 @@ export default function TaskDetailPage() {
               </div>
             )}
 
+            {/* Task FAILED with escrow split (max revisions reached) */}
+            {task.status === 'FAILED' && hasEscrow && escrowStatus === 'RELEASED' && (
+              <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-900 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-orange-600" />
+                  <span className="text-orange-800 dark:text-orange-200 font-medium">
+                    Task failed after maximum revisions — escrow split
+                  </span>
+                </div>
+                <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
+                  Agent received 80% ({(displayEscrowAmount * 0.8).toFixed(2)} {task.tokenSymbol}) for their work.
+                  Creator refund: 20% ({(displayEscrowAmount * 0.2).toFixed(2)} {task.tokenSymbol}).
+                </p>
+              </div>
+            )}
+
             {/* Escrow Released - Payment Complete */}
-            {isEscrowReleased && (
+            {isEscrowReleased && task.status !== 'FAILED' && (
               <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-900 rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -906,6 +979,116 @@ export default function TaskDetailPage() {
                     )}
                     Submit Work for Validation
                   </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Submission Review - IN_REVIEW flow (new revision system) */}
+            {task.status === 'IN_REVIEW' && (() => {
+              const latestSubmission = submissions.filter(s => s.status === 'SUBMITTED').slice(-1)[0];
+              if (!latestSubmission) return null;
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Submission v{latestSubmission.version}
+                    </CardTitle>
+                    <CardDescription>
+                      Submitted by agent — review and approve or request changes
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="p-3 bg-muted rounded-lg max-h-64 overflow-y-auto">
+                      <p className="text-sm whitespace-pre-wrap">{latestSubmission.content}</p>
+                    </div>
+
+                    {submissions.length > 1 && (
+                      <p className="text-xs text-muted-foreground">
+                        {submissions.length} submission{submissions.length > 1 ? 's' : ''} total (revision {submissions.length - 1})
+                      </p>
+                    )}
+
+                    {isCreator && (
+                      <div className="space-y-2">
+                        {showRevisionInput ? (
+                          <>
+                            <Textarea
+                              value={revisionFeedback}
+                              onChange={(e) => setRevisionFeedback(e.target.value)}
+                              placeholder="Describe what needs to be changed..."
+                              rows={3}
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                onClick={() => handleReviewSubmission('revise')}
+                                disabled={isReviewing || !revisionFeedback.trim()}
+                                variant="destructive"
+                                className="flex-1 gap-2"
+                              >
+                                {isReviewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                                Request Revision
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                onClick={() => { setShowRevisionInput(false); setRevisionFeedback(''); }}
+                                disabled={isReviewing}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={() => handleReviewSubmission('approve')}
+                              disabled={isReviewing}
+                              className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
+                            >
+                              {isReviewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                              Approve
+                            </Button>
+                            <Button
+                              onClick={() => setShowRevisionInput(true)}
+                              disabled={isReviewing}
+                              variant="outline"
+                              className="flex-1 gap-2"
+                            >
+                              <XCircle className="h-4 w-4" />
+                              Request Revision
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
+            {/* Submission History (when there are multiple versions) */}
+            {submissions.length > 1 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Submission History
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {submissions.map((sub) => (
+                    <div key={sub.id} className="border rounded-lg p-3 text-sm space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">Version {sub.version}</span>
+                        <Badge variant={sub.status === 'APPROVED' ? 'default' : sub.status === 'REVISION_REQUESTED' ? 'destructive' : 'secondary'}>
+                          {sub.status}
+                        </Badge>
+                      </div>
+                      {sub.feedback && (
+                        <p className="text-muted-foreground text-xs">Feedback: {sub.feedback}</p>
+                      )}
+                    </div>
+                  ))}
                 </CardContent>
               </Card>
             )}
