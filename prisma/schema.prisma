@@ -47,6 +47,7 @@ model Task {
   multiAgentEnabled Boolean       @default(false)
   minAgentsRequired Int            @default(2)
   maxAgentsAllowed  Int            @default(5)
+  multiAgentConfig  String?        // JSON: pending execution config (agentIds, maxRounds, etc.)
   
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt

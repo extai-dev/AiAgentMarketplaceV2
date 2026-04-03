@@ -786,6 +786,100 @@ export async function processAgentResponse(
       },
     });
 
+    // ── Auto-accept: immediately accept the bid and assign the task ──────────
+    // This enables autonomous operation without requiring a human to accept bids.
+    // Multi-agent tasks skip this — they use pre-selected agents and a separate
+    // escrow-gated competition flow, not open bidding.
+    const taskForAutoAccept = await db.task.findUnique({
+      where: { id: taskId },
+      select: { multiAgentEnabled: true },
+    });
+
+    if (taskForAutoAccept?.multiAgentEnabled) {
+      // Multi-agent task — do not auto-accept bids
+      return { success: true, bid };
+    }
+
+    // Accept the bid only if no other bid has already been accepted for this task.
+    const alreadyAccepted = await db.bid.findFirst({
+      where: { taskId, status: 'ACCEPTED' },
+      select: { id: true },
+    });
+
+    if (!alreadyAccepted) {
+      // Accept this bid and move task to IN_PROGRESS
+      await db.$transaction([
+        db.bid.update({ where: { id: bid.id }, data: { status: 'ACCEPTED' } }),
+        db.task.update({
+          where: { id: taskId },
+          data: { agentId, status: 'IN_PROGRESS' },
+        }),
+        db.agent.update({
+          where: { id: agentId },
+          data: { acceptedBids: { increment: 1 } },
+        }),
+      ]);
+
+      // Log auto-accept
+      await db.agentLog.create({
+        data: {
+          agentId,
+          level: 'INFO',
+          action: 'BID_AUTO_ACCEPTED',
+          taskId,
+          message: `Bid auto-accepted. Task assigned and moved to IN_PROGRESS.`,
+        },
+      });
+
+      // Notify agent via webhook so it starts executing immediately
+      if (agent.execUrl) {
+        const task = await db.task.findUnique({
+          where: { id: taskId },
+          include: { creator: { select: { walletAddress: true, name: true } } },
+        });
+
+        if (task) {
+          const payload = {
+            type: 'BID_ACCEPTED',
+            timestamp: new Date().toISOString(),
+            notificationId: `auto-accept-${bid.id}-${Date.now()}`,
+            agent: { id: agent.id, name: agent.name },
+            task: {
+              id: task.id,
+              numericId: task.numericId,
+              title: task.title,
+              description: task.description,
+              reward: task.reward,
+              tokenSymbol: task.tokenSymbol,
+              status: task.status,
+              deadline: task.deadline ? task.deadline.toISOString() : null,
+              escrowDeposited: task.escrowDeposited,
+              creator: { walletAddress: task.creator.walletAddress, name: task.creator.name },
+            },
+            bid: { id: bid.id, amount: bid.amount, message: bid.message },
+          };
+
+          const signature = signPayload(payload, agent.apiTokenHash || 'default-signing-key');
+
+          fetch(agent.execUrl!, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Agent-ID': agent.id,
+              'X-Signature': signature,
+              'X-Notification-ID': payload.notificationId,
+            },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(10000),
+          }).catch((err: Error) => {
+            // Webhook delivery is best-effort; agent will pick it up via checkForAcceptedBids polling
+            console.warn(`[AutoAccept] Webhook delivery failed for agent ${agentId}:`, err.message);
+          });
+        }
+      }
+    }
+    // ── End auto-accept ───────────────────────────────────────────────────────
+
     return { success: true, bid };
   } catch (error: any) {
     console.error('Error processing agent response:', error);

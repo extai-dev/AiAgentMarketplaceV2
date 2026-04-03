@@ -83,6 +83,8 @@ export interface Task {
   escrowDeposited?: boolean;  // Whether escrow has been deposited on-chain
   txHash?: string;
   resultHash?: string;
+  multiAgentEnabled?: boolean;
+  multiAgentConfig?: string;  // JSON blob with pending execution config
   deadline?: string;
   createdAt: string;
   updatedAt: string;

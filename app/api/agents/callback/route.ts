@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { verifyAgentToken, extractAgentCredentials } from '@/lib/agent-auth';
-import { AgentResponse, processAgentResponse } from '@/lib/agent-dispatcher';
+import { AgentResponse, processAgentResponse, matchesCriteria, AgentCriteria } from '@/lib/agent-dispatcher';
 
 /**
  * POST /api/agents/callback
@@ -59,10 +59,14 @@ export async function POST(request: NextRequest) {
     switch (type) {
       case 'BID_RESPONSE':
         return await handleBidResponse(agentId, body, request);
-      
+
       case 'HEARTBEAT':
         return await handleHeartbeat(agentId, body);
-      
+
+      // Agent came online — returns missed single-agent tasks AND active multi-agent rounds
+      case 'CHECKIN':
+        return await handleCheckin(agentId, body);
+
       // Multi-agent callback types
       case 'MULTI_AGENT_SUBMISSION':
         return await handleMultiAgentSubmission(agentId, body);
@@ -129,6 +133,14 @@ async function handleBidResponse(
     return NextResponse.json(
       { success: false, error: 'Task not found' },
       { status: 404 }
+    );
+  }
+
+  // Multi-agent tasks use pre-selected agents — bidding is not allowed
+  if (task.multiAgentEnabled) {
+    return NextResponse.json(
+      { success: false, error: 'This task uses a multi-agent competition. Bidding is not allowed.' },
+      { status: 400 }
     );
   }
 
@@ -225,28 +237,65 @@ async function handleBidResponse(
 }
 
 /**
- * Handle heartbeat from agent
+ * Handle heartbeat from agent.
+ * Updates lastSeen and returns a pendingTasks count so the agent knows
+ * whether to immediately call GET /api/agents/callback to pick up work.
  */
 async function handleHeartbeat(agentId: string, body: any) {
   const { metrics, status } = body;
 
-  // Update agent's last seen time
-  await db.agent.update({
+  // Update agent's last seen time and status
+  const agent = await db.agent.update({
     where: { id: agentId },
     data: {
       lastSeen: new Date(),
       lastError: null,
       status: status || 'ACTIVE',
     },
+    select: { criteria: true },
   });
 
-  // Log heartbeat (with DEBUG level to avoid cluttering logs)
+  // Count OPEN tasks this agent should act on (quick check, no full fetch)
+  let pendingTasks = 0;
+  try {
+    let criteria: AgentCriteria = {};
+    try {
+      criteria = JSON.parse(agent.criteria || '{}');
+    } catch { /* ignore */ }
+
+    // Count open single-agent tasks not yet successfully dispatched to this agent
+    const openTasks = await db.task.findMany({
+      where: { status: 'OPEN', multiAgentEnabled: false },
+      select: {
+        id: true,
+        reward: true,
+        title: true,
+        description: true,
+        escrowDeposited: true,
+        dispatches: { where: { agentId, status: { in: ['SUCCESS', 'SKIPPED'] } }, select: { id: true } },
+      },
+      take: 100,
+    });
+
+    for (const task of openTasks) {
+      if (task.dispatches.length > 0) continue; // already handled
+      const { matches } = matchesCriteria(
+        { reward: task.reward, title: task.title, description: task.description, escrowDeposited: task.escrowDeposited },
+        criteria
+      );
+      if (matches) pendingTasks++;
+    }
+  } catch (err) {
+    console.error('[Heartbeat] Error counting pending tasks:', err);
+  }
+
+  // Log heartbeat
   await db.agentLog.create({
     data: {
       agentId,
       level: 'DEBUG',
       action: 'HEARTBEAT',
-      message: 'Agent heartbeat received',
+      message: `Agent heartbeat received. Pending tasks: ${pendingTasks}`,
       metadata: metrics ? JSON.stringify(metrics) : undefined,
     },
   });
@@ -255,16 +304,30 @@ async function handleHeartbeat(agentId: string, body: any) {
     success: true,
     message: 'Heartbeat received',
     timestamp: new Date().toISOString(),
+    pendingTasks,
   });
 }
 
 /**
  * GET /api/agents/callback
- * Get pending notifications for an agent (pull-based alternative to webhooks)
+ * Pull-based task discovery for agents.
+ *
+ * Returns all OPEN tasks this agent should act on:
+ *   1. Existing PENDING dispatches (not yet processed)
+ *   2. Previously FAILED or TIMEOUT dispatches whose task is still OPEN
+ *      (agent was offline when the push notification arrived)
+ *   3. OPEN tasks matching agent criteria with NO dispatch record at all
+ *      (agent registered after the task was created, or was never targeted)
+ *
+ * For categories 2 and 3, new/reset dispatch records are created so the
+ * attempt is tracked and won't re-surface after the agent responds.
+ *
+ * Headers required:
+ *   X-Agent-ID: <agentId>
+ *   Authorization: Bearer <apiToken>
  */
 export async function GET(request: NextRequest) {
   try {
-    // Extract and verify agent credentials
     const { agentId, apiToken } = extractAgentCredentials(request);
 
     if (!agentId || !apiToken) {
@@ -282,24 +345,71 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get pending dispatches for this agent
-    const pendingDispatches = await db.agentDispatch.findMany({
-      where: {
-        agentId,
-        status: 'PENDING',
-      },
-      include: {
-        task: {
-          include: {
-            creator: {
-              select: { walletAddress: true, name: true },
-            },
-          },
-        },
-      },
-      orderBy: { dispatchedAt: 'asc' },
-      take: 10,
+    // Fetch agent to read criteria
+    const agent = await db.agent.findUnique({
+      where: { id: agentId },
+      select: { id: true, criteria: true, lastSeen: true },
     });
+
+    if (!agent) {
+      return NextResponse.json({ success: false, error: 'Agent not found' }, { status: 404 });
+    }
+
+    let criteria: AgentCriteria = {};
+    try {
+      criteria = JSON.parse(agent.criteria || '{}');
+    } catch {
+      // malformed criteria — treat as no filter
+    }
+
+    // Load all OPEN single-agent tasks (exclude multi-agent competitions)
+    const openTasks = await db.task.findMany({
+      where: { status: 'OPEN', multiAgentEnabled: false },
+      include: {
+        creator: { select: { walletAddress: true, name: true } },
+        dispatches: { where: { agentId } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+
+    // Determine which tasks this agent should act on
+    const tasksToReturn: typeof openTasks = [];
+
+    for (const task of openTasks) {
+      const dispatch = task.dispatches[0]; // at most one dispatch per agent per task
+
+      // Skip tasks where agent already successfully responded
+      if (dispatch?.status === 'SUCCESS' || dispatch?.status === 'SKIPPED') continue;
+
+      // Check whether the task matches agent criteria
+      const { matches } = matchesCriteria(
+        { reward: task.reward, title: task.title, description: task.description, escrowDeposited: task.escrowDeposited },
+        criteria
+      );
+      if (!matches) continue;
+
+      tasksToReturn.push(task);
+
+      // Ensure a dispatch record exists and is in PENDING state for tracking
+      if (!dispatch) {
+        // No prior dispatch — agent missed it entirely; create a fresh record
+        await db.agentDispatch.create({
+          data: { agentId, taskId: task.id, status: 'PENDING' },
+        });
+      } else if (dispatch.status === 'FAILED' || dispatch.status === 'TIMEOUT') {
+        // Prior attempt failed — mark as PENDING again for this retrieval
+        await db.agentDispatch.update({
+          where: { id: dispatch.id },
+          data: {
+            status: 'PENDING',
+            retryCount: { increment: 1 },
+            errorMessage: null,
+          },
+        });
+      }
+      // PENDING dispatch: leave as-is — agent is picking it up now
+    }
 
     // Update agent's last seen
     await db.agent.update({
@@ -307,24 +417,34 @@ export async function GET(request: NextRequest) {
       data: { lastSeen: new Date() },
     });
 
+    console.log(
+      `[AgentCallback] GET poll from agent ${agentId}: ${tasksToReturn.length} tasks returned (${openTasks.length} open tasks checked)`
+    );
+
     return NextResponse.json({
       success: true,
-      data: pendingDispatches.map(d => ({
-        notificationId: d.id,
-        taskId: d.taskId,
+      data: tasksToReturn.slice(0, 20).map(task => ({
+        notificationId: task.dispatches[0]?.id ?? `${agentId}-${task.id}`,
+        taskId: task.id,
+        type: 'NEW_TASK',
         task: {
-          id: d.task.id,
-          numericId: d.task.numericId,
-          title: d.task.title,
-          description: d.task.description,
-          reward: d.task.reward,
-          tokenSymbol: d.task.tokenSymbol,
-          status: d.task.status,
-          deadline: d.task.deadline,
-          escrowDeposited: d.task.escrowDeposited,
-          creator: d.task.creator,
+          id: task.id,
+          numericId: task.numericId,
+          title: task.title,
+          description: task.description,
+          reward: task.reward,
+          tokenSymbol: task.tokenSymbol,
+          status: task.status,
+          deadline: task.deadline,
+          escrowDeposited: task.escrowDeposited,
+          multiAgentEnabled: task.multiAgentEnabled,
+          creator: task.creator,
         },
       })),
+      meta: {
+        total: tasksToReturn.length,
+        returned: Math.min(tasksToReturn.length, 20),
+      },
     });
   } catch (error) {
     console.error('Error fetching pending notifications:', error);
@@ -333,6 +453,152 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Handle agent check-in (CHECKIN).
+ *
+ * Called when an agent comes online after being offline.
+ * Returns:
+ *   - pendingTasks: OPEN single-agent tasks matching criteria that weren't
+ *     successfully dispatched (missed webhooks + never dispatched)
+ *   - activeRounds: active multi-agent executions where this agent is a
+ *     participant still waiting to submit (agent missed the round notification)
+ *
+ * POST /api/agents/callback
+ * { type: 'CHECKIN' }
+ */
+async function handleCheckin(agentId: string, _body: any) {
+  // Mark agent online
+  const agent = await db.agent.update({
+    where: { id: agentId },
+    data: { lastSeen: new Date(), status: 'ACTIVE', lastError: null },
+    select: { name: true, criteria: true },
+  });
+
+  let criteria: AgentCriteria = {};
+  try {
+    criteria = JSON.parse(agent.criteria || '{}');
+  } catch { /* ignore */ }
+
+  // ── 1. Missed single-agent tasks (exclude multi-agent competitions) ──────
+  const openTasks = await db.task.findMany({
+    where: { status: 'OPEN', multiAgentEnabled: false },
+    include: {
+      creator: { select: { walletAddress: true, name: true } },
+      dispatches: { where: { agentId } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 50,
+  });
+
+  const missedTasks: typeof openTasks = [];
+  for (const task of openTasks) {
+    const dispatch = task.dispatches[0];
+    if (dispatch?.status === 'SUCCESS' || dispatch?.status === 'SKIPPED') continue;
+
+    const { matches } = matchesCriteria(
+      { reward: task.reward, title: task.title, description: task.description, escrowDeposited: task.escrowDeposited },
+      criteria
+    );
+    if (!matches) continue;
+
+    missedTasks.push(task);
+
+    // Ensure dispatch record is PENDING
+    if (!dispatch) {
+      await db.agentDispatch.create({ data: { agentId, taskId: task.id, status: 'PENDING' } });
+    } else if (dispatch.status === 'FAILED' || dispatch.status === 'TIMEOUT') {
+      await db.agentDispatch.update({
+        where: { id: dispatch.id },
+        data: { status: 'PENDING', retryCount: { increment: 1 }, errorMessage: null },
+      });
+    }
+  }
+
+  // ── 2. Active multi-agent rounds waiting for this agent's submission ────
+  const activeParticipations = await db.agentParticipation.findMany({
+    where: {
+      agentId,
+      status: { in: ['INVITED', 'GENERATING', 'REVISING'] },
+      taskExecution: {
+        status: { in: ['AGENTS_GENERATING', 'REVISING'] },
+      },
+    },
+    include: {
+      taskExecution: {
+        include: {
+          task: {
+            include: { creator: { select: { walletAddress: true, name: true } } },
+          },
+        },
+      },
+    },
+  });
+
+  const activeRounds = activeParticipations.map(p => ({
+    executionId: p.taskExecutionId,
+    round: p.currentRound,
+    status: p.status,
+    taskId: p.taskExecution.taskId,
+    task: {
+      id: p.taskExecution.task.id,
+      numericId: p.taskExecution.task.numericId,
+      title: p.taskExecution.task.title,
+      description: p.taskExecution.task.description,
+      reward: p.taskExecution.task.reward,
+      tokenSymbol: p.taskExecution.task.tokenSymbol,
+      status: p.taskExecution.task.status,
+      deadline: p.taskExecution.task.deadline,
+      escrowDeposited: p.taskExecution.task.escrowDeposited,
+      creator: p.taskExecution.task.creator,
+    },
+    instruction:
+      p.currentRound === 1
+        ? `Round ${p.currentRound}: Submit your initial solution. POST to /api/tasks/${p.taskExecution.taskId}/multi/submit with executionId "${p.taskExecutionId}".`
+        : `Round ${p.currentRound}: Submit your revised solution. POST to /api/tasks/${p.taskExecution.taskId}/multi/submit with executionId "${p.taskExecutionId}".`,
+  }));
+
+  await db.agentLog.create({
+    data: {
+      agentId,
+      level: 'INFO',
+      action: 'CHECKIN',
+      message: `Agent checked in. Missed tasks: ${missedTasks.length}, active rounds: ${activeRounds.length}`,
+    },
+  });
+
+  console.log(
+    `[AgentCallback] CHECKIN from agent ${agentId} (${agent.name}): ${missedTasks.length} missed tasks, ${activeRounds.length} active rounds`
+  );
+
+  return NextResponse.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    pendingTasks: missedTasks.slice(0, 20).map(task => ({
+      notificationId: task.dispatches[0]?.id ?? `${agentId}-${task.id}`,
+      taskId: task.id,
+      type: 'NEW_TASK',
+      task: {
+        id: task.id,
+        numericId: task.numericId,
+        title: task.title,
+        description: task.description,
+        reward: task.reward,
+        tokenSymbol: task.tokenSymbol,
+        status: task.status,
+        deadline: task.deadline,
+        escrowDeposited: task.escrowDeposited,
+        multiAgentEnabled: task.multiAgentEnabled,
+        creator: task.creator,
+      },
+    })),
+    activeRounds,
+    meta: {
+      missedTaskCount: missedTasks.length,
+      activeRoundCount: activeRounds.length,
+    },
+  });
 }
 
 /**

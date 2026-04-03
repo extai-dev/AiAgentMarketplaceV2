@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { TaskStatus } from '@prisma/client';
+import { TaskStatus, SelectionMode } from '@prisma/client';
 import { db } from '@/lib/db';
 import { dispatchNewTask } from '@/lib/agent-dispatcher';
+import { startMultiAgentExecution } from '@/lib/services/multi-agent-orchestrator';
 
 /**
  * Get the next numeric ID for a task
@@ -132,6 +133,7 @@ export async function POST(request: NextRequest) {
       deadline,
       onChainId,
       txHash,
+      multiAgentConfig,
     } = body;
 
     // Validation
@@ -147,6 +149,40 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Reward must be a positive number' },
         { status: 400 }
       );
+    }
+
+    // Validate multi-agent config if provided
+    const isMultiAgent = body.multiAgentEnabled === true;
+    if (isMultiAgent && multiAgentConfig) {
+      const { agentIds } = multiAgentConfig;
+      if (!Array.isArray(agentIds) || agentIds.length < 2) {
+        return NextResponse.json(
+          { success: false, error: 'multiAgentConfig.agentIds must contain at least 2 agent IDs' },
+          { status: 400 }
+        );
+      }
+      const maxAllowed = body.maxAgentsAllowed || 5;
+      if (agentIds.length > maxAllowed) {
+        return NextResponse.json(
+          { success: false, error: `multiAgentConfig.agentIds exceeds maxAgentsAllowed (${maxAllowed})` },
+          { status: 400 }
+        );
+      }
+      // Verify all agents exist
+      const agents = await db.agent.findMany({ where: { id: { in: agentIds } } });
+      if (agents.length !== agentIds.length) {
+        return NextResponse.json(
+          { success: false, error: 'One or more agents in multiAgentConfig.agentIds not found' },
+          { status: 400 }
+        );
+      }
+      const validModes = ['WINNER_TAKE_ALL', 'MERGED_OUTPUT', 'SPLIT_PAYMENT'];
+      if (multiAgentConfig.selectionMode && !validModes.includes(multiAgentConfig.selectionMode)) {
+        return NextResponse.json(
+          { success: false, error: `Invalid selectionMode: ${multiAgentConfig.selectionMode}` },
+          { status: 400 }
+        );
+      }
     }
 
     // Get or create user
@@ -196,10 +232,19 @@ export async function POST(request: NextRequest) {
         deadline: deadline ? new Date(deadline) : null,
         txHash,
         status: TaskStatus.OPEN,
-        // Multi-agent defaults (can be configured later via /multi/config)
-        multiAgentEnabled: body.multiAgentEnabled || false,
+        multiAgentEnabled: isMultiAgent,
         minAgentsRequired: body.minAgentsRequired || 2,
         maxAgentsAllowed: body.maxAgentsAllowed || 5,
+        multiAgentConfig: (isMultiAgent && multiAgentConfig)
+          ? JSON.stringify({
+              agentIds: multiAgentConfig.agentIds,
+              maxRounds: multiAgentConfig.maxRounds ?? 3,
+              minScoreThreshold: multiAgentConfig.minScoreThreshold ?? 70,
+              selectionMode: multiAgentConfig.selectionMode ?? 'WINNER_TAKE_ALL',
+              judgeModel: multiAgentConfig.judgeModel ?? 'gemini-2.0-flash',
+              judgeProvider: multiAgentConfig.judgeProvider ?? 'gemini',
+            })
+          : null,
       },
       include: {
         creator: {
@@ -212,6 +257,10 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Multi-agent tasks use pre-selected agents — skip open dispatch
+    if (isMultiAgent) {
+      console.log(`[Tasks] Multi-agent task ${task.id} — skipping open dispatch (agents are pre-selected).`);
+    } else {
     // Dispatch task notification to all active AI agents (async, non-blocking)
     console.log(`[Tasks] Task created successfully (ID: ${task.id}, numericId: ${task.numericId}). Dispatching to agents...`);
     dispatchNewTask({
@@ -232,13 +281,48 @@ export async function POST(request: NextRequest) {
       console.log(`[Tasks] Dispatch completed for task ${task.numericId}. Sent to ${results.length} agents`);
     }).catch(error => {
       console.error('[Tasks] Failed to dispatch task to agents:', error);
-      // Don't fail the request if dispatch fails
     });
+    } // end single-agent dispatch
+
+    // If multi-agent is enabled with config and escrow is already deposited, auto-start execution
+    let executionData: { executionId: string; agentCount: number; maxRounds: number } | null = null;
+    if (isMultiAgent && multiAgentConfig && task.escrowDeposited) {
+      console.log(`[Tasks] Multi-agent enabled with escrow already deposited, auto-starting execution for task ${task.id}`);
+      const cfg = multiAgentConfig as {
+        agentIds: string[];
+        maxRounds?: number;
+        minScoreThreshold?: number;
+        selectionMode?: string;
+        judgeModel?: string;
+        judgeProvider?: string;
+      };
+      const result = await startMultiAgentExecution({
+        taskId: task.id,
+        agentIds: cfg.agentIds,
+        maxRounds: cfg.maxRounds ?? 3,
+        minScoreThreshold: cfg.minScoreThreshold ?? 70,
+        selectionMode: (cfg.selectionMode ?? 'WINNER_TAKE_ALL') as SelectionMode,
+        judgeModel: cfg.judgeModel ?? 'gemini-2.0-flash',
+        judgeProvider: cfg.judgeProvider ?? 'gemini',
+      });
+      if (result.success) {
+        executionData = { executionId: result.executionId!, agentCount: cfg.agentIds.length, maxRounds: cfg.maxRounds ?? 3 };
+        console.log(`[Tasks] Multi-agent execution started: ${result.executionId}`);
+      } else {
+        console.error(`[Tasks] Failed to auto-start multi-agent execution: ${result.error}`);
+      }
+    } else if (isMultiAgent && multiAgentConfig) {
+      console.log(`[Tasks] Multi-agent config stored for task ${task.id}. Execution will auto-start after escrow deposit.`);
+    }
 
     return NextResponse.json({
       success: true,
       data: task,
       message: 'Task created successfully',
+      ...(executionData && { execution: executionData }),
+      ...(isMultiAgent && multiAgentConfig && !executionData && {
+        multiAgent: { status: 'PENDING_ESCROW', message: 'Deposit escrow to auto-start multi-agent execution' },
+      }),
     }, { status: 201 });
   } catch (error) {
     console.error('Error creating task:', error);

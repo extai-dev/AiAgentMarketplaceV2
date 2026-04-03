@@ -412,7 +412,7 @@ async function proceedToNextRound(executionId: string): Promise<void> {
   const execution = await db.taskExecution.findUnique({
     where: { id: executionId },
     include: {
-      task: true,
+      task: { include: { creator: { select: { walletAddress: true, name: true } } } },
       evaluations: { where: { round: executionRound.currentRound }, orderBy: { overallScore: 'desc' } },
     },
   });
@@ -554,7 +554,7 @@ async function notifyParticipantsOfResult(executionId: string, winnerAgentId: st
   const execution = await db.taskExecution.findUnique({
     where: { id: executionId },
     include: {
-      task: true,
+      task: { include: { creator: { select: { walletAddress: true, name: true } } } },
       participations: { include: { agent: true } },
     },
   });

@@ -35,8 +35,18 @@ import {
   Copy,
   Check,
   Shield,
-  Send
+  Send,
+  Users,
+  Trophy,
+  Bot,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  BarChart2,
+  GitMerge,
+  SplitSquareVertical,
 } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
 
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open for Bids', color: 'bg-blue-500', icon: <Clock className="h-4 w-4" /> },
@@ -77,6 +87,11 @@ export default function TaskDetailPage() {
   // Work submission form state
   const [workContent, setWorkContent] = useState('');
   const [resultUri, setResultUri] = useState('');
+
+  // Multi-agent state
+  const [multiAgentExecution, setMultiAgentExecution] = useState<any>(null);
+  const [isDepositingEscrow, setIsDepositingEscrow] = useState(false);
+  const [expandedRound, setExpandedRound] = useState<number | null>(null);
 
   // Validation form state
   const [validationScore, setValidationScore] = useState(100);
@@ -388,6 +403,37 @@ export default function TaskDetailPage() {
     }
   }, [task?.id]);
 
+  // Fetch multi-agent execution status — declared here so useEffects below can reference it
+  const fetchMultiAgentStatus = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/multi`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setMultiAgentExecution(data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch multi-agent status:', err);
+    }
+  }, [taskId]);
+
+  // Fetch multi-agent execution status when task loads and has multi-agent enabled
+  useEffect(() => {
+    if (task?.multiAgentEnabled) {
+      fetchMultiAgentStatus();
+    }
+  }, [task?.id, task?.multiAgentEnabled, fetchMultiAgentStatus]);
+
+  // Poll multi-agent execution while it is active
+  useEffect(() => {
+    if (!task?.multiAgentEnabled) return;
+    const activeStatuses = ['AGENTS_GENERATING', 'EVALUATING', 'REVISING'];
+    if (!multiAgentExecution || !activeStatuses.includes(multiAgentExecution.status)) return;
+
+    const interval = setInterval(fetchMultiAgentStatus, 10000);
+    return () => clearInterval(interval);
+  }, [task?.multiAgentEnabled, multiAgentExecution?.status, fetchMultiAgentStatus]);
+
   // Release Payment - ON-CHAIN (approveAndRelease)
   const handleReleasePayment = async () => {
     if (!task || !isCreator || !isCorrectNetwork) return;
@@ -503,6 +549,34 @@ export default function TaskDetailPage() {
         description: error.message,
         variant: 'destructive',
       });
+    }
+  };
+
+  // Deposit escrow for multi-agent task (no bid required)
+  const handleDepositEscrow = async () => {
+    if (!task || !isCreator) return;
+    setIsDepositingEscrow(true);
+    try {
+      const res = await fetch('/api/escrow/deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: task.id, amount: task.reward }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.error || 'Failed to deposit escrow');
+
+      toast({
+        title: 'Escrow deposited!',
+        description: result.execution
+          ? `Multi-agent competition started with ${result.execution.agentCount} agents.`
+          : 'Escrow locked. Multi-agent execution will start shortly.',
+      });
+      await refreshTask();
+      await fetchMultiAgentStatus();
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsDepositingEscrow(false);
     }
   };
 
@@ -747,8 +821,37 @@ export default function TaskDetailPage() {
               </CardContent>
             </Card>
 
-            {/* Escrow Status Warning */}
-            {task.status === 'IN_PROGRESS' && !hasEscrow && isCreator && (
+            {/* Escrow Deposit — Multi-Agent */}
+            {(task as any).multiAgentEnabled && !hasEscrow && isCreator && (
+              <Card className="border-purple-200 dark:border-purple-900 bg-purple-50 dark:bg-purple-950">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2 text-purple-800 dark:text-purple-200">
+                    <Users className="h-4 w-4" />
+                    Start Multi-Agent Competition
+                  </CardTitle>
+                  <CardDescription className="text-purple-700 dark:text-purple-300">
+                    Deposit escrow to lock {task.reward} {task.tokenSymbol} and automatically start the competition between your selected agents.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    onClick={handleDepositEscrow}
+                    disabled={isDepositingEscrow}
+                    className="w-full gap-2 bg-purple-600 hover:bg-purple-700"
+                  >
+                    {isDepositingEscrow ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Coins className="h-4 w-4" />
+                    )}
+                    {isDepositingEscrow ? 'Depositing...' : `Deposit ${task.reward} ${task.tokenSymbol} & Start Competition`}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Escrow Status Warning — single-agent tasks only */}
+            {task.status === 'IN_PROGRESS' && !hasEscrow && isCreator && !(task as any).multiAgentEnabled && (
               <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-900 rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="h-4 w-4 text-yellow-600" />
@@ -859,6 +962,198 @@ export default function TaskDetailPage() {
 
             {/* Bids List */}
             <BidList task={task} bids={bids} onBidSubmitted={refreshTask} onBidAccepted={refreshTask} />
+
+            {/* Multi-Agent Execution Panel */}
+            {(task as any).multiAgentEnabled && multiAgentExecution && (() => {
+              const exec = multiAgentExecution;
+              const statusColors: Record<string, string> = {
+                AGENTS_GENERATING: 'bg-blue-500',
+                EVALUATING: 'bg-purple-500',
+                REVISING: 'bg-yellow-500',
+                COMPLETED: 'bg-green-500',
+                FAILED: 'bg-red-500',
+                PENDING: 'bg-gray-400',
+              };
+              const statusLabels: Record<string, string> = {
+                AGENTS_GENERATING: 'Agents generating…',
+                EVALUATING: 'Judge evaluating…',
+                REVISING: 'Agents revising…',
+                COMPLETED: 'Competition complete',
+                FAILED: 'Execution failed',
+                PENDING: 'Pending',
+              };
+              const activeStatuses = ['AGENTS_GENERATING', 'EVALUATING', 'REVISING'];
+              const isActive = activeStatuses.includes(exec.status);
+              const roundProgress = exec.maxRounds > 0 ? Math.round((exec.currentRound / exec.maxRounds) * 100) : 0;
+
+              const selectionIcon: Record<string, React.ReactNode> = {
+                WINNER_TAKE_ALL: <Trophy className="h-3.5 w-3.5" />,
+                MERGED_OUTPUT: <GitMerge className="h-3.5 w-3.5" />,
+                SPLIT_PAYMENT: <SplitSquareVertical className="h-3.5 w-3.5" />,
+              };
+
+              // Group evaluations by round
+              const evalsByRound: Record<number, any[]> = {};
+              (exec.evaluations || []).forEach((e: any) => {
+                if (!evalsByRound[e.round]) evalsByRound[e.round] = [];
+                evalsByRound[e.round].push(e);
+              });
+              const rounds = Object.keys(evalsByRound).map(Number).sort((a, b) => a - b);
+
+              return (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <Users className="h-5 w-5" />
+                        Multi-Agent Competition
+                      </CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Badge className={`${statusColors[exec.status] || 'bg-gray-400'} text-white text-xs`}>
+                          {isActive && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
+                          {statusLabels[exec.status] || exec.status}
+                        </Badge>
+                        {isActive && (
+                          <Button variant="ghost" size="sm" onClick={fetchMultiAgentStatus} className="h-7 w-7 p-0">
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1">
+                      <span>Round {exec.currentRound}/{exec.maxRounds}</span>
+                      <span>Stop at {exec.minScoreThreshold}/100</span>
+                      <span className="flex items-center gap-1">{selectionIcon[exec.selectionMode]}{exec.selectionMode?.replace(/_/g, ' ')}</span>
+                    </div>
+                    <Progress value={roundProgress} className="h-1.5 mt-2" />
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+
+                    {/* Participants */}
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium flex items-center gap-2"><Bot className="h-4 w-4" />Agents</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {(exec.participants || []).map((p: any) => {
+                          const isWinner = exec.winnerAgentId === p.agentId;
+                          const statusColor: Record<string, string> = {
+                            INVITED: 'secondary',
+                            GENERATING: 'secondary',
+                            WAITING_EVAL: 'secondary',
+                            REVISING: 'secondary',
+                            ELIMINATED: 'destructive',
+                            COMPLETED: 'default',
+                          };
+                          return (
+                            <div key={p.id} className={`flex items-center gap-3 rounded-md border px-3 py-2 text-sm ${isWinner ? 'border-green-500 bg-green-50 dark:bg-green-950' : ''}`}>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium truncate">{p.agentName}</span>
+                                  {isWinner && <Trophy className="h-3.5 w-3.5 text-yellow-500 shrink-0" />}
+                                  <Badge variant={statusColor[p.status] as any || 'secondary'} className="text-xs shrink-0">{p.status}</Badge>
+                                </div>
+                                {p.rewardPercent != null && (
+                                  <p className="text-xs text-muted-foreground mt-0.5">Reward: {p.rewardPercent.toFixed(1)}%</p>
+                                )}
+                              </div>
+                              {p.bestScore != null && (
+                                <div className="text-right shrink-0">
+                                  <p className="text-lg font-bold leading-none">{p.bestScore}</p>
+                                  <p className="text-xs text-muted-foreground">/100</p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Winner / Merged Output */}
+                    {exec.status === 'COMPLETED' && exec.mergedOutput && (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium flex items-center gap-2"><GitMerge className="h-4 w-4" />Merged Output</p>
+                        <div className="rounded-md bg-muted p-3 max-h-48 overflow-y-auto text-sm whitespace-pre-wrap">
+                          {exec.mergedOutput}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Round evaluations */}
+                    {rounds.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium flex items-center gap-2"><BarChart2 className="h-4 w-4" />Round Results</p>
+                        <div className="space-y-2">
+                          {rounds.map((round) => {
+                            const evals = evalsByRound[round];
+                            const isOpen = expandedRound === round;
+                            return (
+                              <div key={round} className="rounded-md border">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedRound(isOpen ? null : round)}
+                                  className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
+                                >
+                                  <span>Round {round}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">{evals.length} eval{evals.length !== 1 ? 's' : ''}</span>
+                                    {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                  </div>
+                                </button>
+                                {isOpen && (
+                                  <div className="border-t px-3 py-2 space-y-3">
+                                    {evals.sort((a: any, b: any) => (b.overallScore ?? 0) - (a.overallScore ?? 0)).map((e: any) => {
+                                      const participant = (exec.participants || []).find((p: any) => p.agentId === e.agentId);
+                                      return (
+                                        <div key={e.id} className={`text-sm space-y-1 ${e.isBestInRound ? 'text-green-700 dark:text-green-400' : ''}`}>
+                                          <div className="flex items-center justify-between">
+                                            <span className="font-medium">{participant?.agentName || e.agentId.slice(0, 8)}</span>
+                                            <div className="flex items-center gap-2">
+                                              {e.isBestInRound && <Trophy className="h-3.5 w-3.5 text-yellow-500" />}
+                                              <span className="font-bold">{e.overallScore ?? '—'}/100</span>
+                                            </div>
+                                          </div>
+                                          {e.feedback && (
+                                            <p className="text-xs text-muted-foreground leading-snug">{e.feedback}</p>
+                                          )}
+                                          {e.eliminationReason && (
+                                            <p className="text-xs text-destructive">Eliminated: {e.eliminationReason}</p>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Waiting message when no evaluations yet */}
+                    {rounds.length === 0 && isActive && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Waiting for agents to submit their first round…
+                      </div>
+                    )}
+
+                    {exec.totalCost > 0 && (
+                      <p className="text-xs text-muted-foreground">Judge cost: ${exec.totalCost.toFixed(4)}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
+            {/* Multi-Agent — waiting for escrow */}
+            {(task as any).multiAgentEnabled && hasEscrow && !multiAgentExecution && (
+              <div className="bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-900 rounded-lg p-4 flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-purple-600" />
+                <span className="text-purple-800 dark:text-purple-200 text-sm">
+                  Starting multi-agent competition…
+                </span>
+              </div>
+            )}
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
@@ -1269,11 +1564,32 @@ export default function TaskDetailPage() {
                     </a>
                   </div>
                 )}
+                {(task as any).multiAgentEnabled && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Multi-Agent</span>
+                    <span className="font-medium text-purple-600">
+                      {multiAgentExecution
+                        ? `Round ${multiAgentExecution.currentRound}/${multiAgentExecution.maxRounds} · ${multiAgentExecution.status}`
+                        : hasEscrow ? 'Starting…' : 'Awaiting escrow'}
+                    </span>
+                  </div>
+                )}
                 <div className="pt-2 border-t text-xs text-muted-foreground">
-                  <p>✓ Task & Bids: Database only</p>
-                  <p>✓ Accept Bid: depositEscrow() on-chain</p>
-                  <p>✓ Complete: Database only (requires escrow)</p>
-                  <p>✓ Release: approveAndRelease() on-chain</p>
+                  {(task as any).multiAgentEnabled ? (
+                    <>
+                      <p>✓ Task: Database only</p>
+                      <p>✓ Deposit Escrow: Auto-starts competition</p>
+                      <p>✓ Agents compete over {multiAgentExecution?.maxRounds ?? '?'} rounds</p>
+                      <p>✓ Release: approveAndRelease() on-chain</p>
+                    </>
+                  ) : (
+                    <>
+                      <p>✓ Task & Bids: Database only</p>
+                      <p>✓ Accept Bid: depositEscrow() on-chain</p>
+                      <p>✓ Complete: Database only (requires escrow)</p>
+                      <p>✓ Release: approveAndRelease() on-chain</p>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>

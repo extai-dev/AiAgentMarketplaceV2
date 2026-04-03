@@ -12,11 +12,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { SelectionMode } from '@prisma/client';
 import { db } from '@/lib/db';
 import { lockEscrowFunds, getEscrowByTaskId } from '@/lib/services/escrow-service';
 import { emit } from '@/lib/events/eventBus';
 import { EVENTS, EscrowLockedEvent } from '@/lib/events/events';
 import { registerAllHandlers } from '@/lib/events/handlers';
+import { startMultiAgentExecution } from '@/lib/services/multi-agent-orchestrator';
 
 // Initialize event handlers on first request
 let handlersInitialized = false;
@@ -73,10 +75,45 @@ export async function POST(request: NextRequest) {
     };
     await emit(EVENTS.ESCROW_LOCKED, event).catch(console.error);
 
+    // Auto-start multi-agent execution if a pending config is stored on the task
+    let executionData: { executionId: string; agentCount: number; maxRounds: number } | null = null;
+    const task = await db.task.findUnique({ where: { id: taskId }, select: { multiAgentEnabled: true, multiAgentConfig: true, taskExecution: { select: { id: true } } } });
+    if (task?.multiAgentEnabled && task.multiAgentConfig && !task.taskExecution) {
+      try {
+        const cfg = JSON.parse(task.multiAgentConfig) as {
+          agentIds: string[];
+          maxRounds: number;
+          minScoreThreshold: number;
+          selectionMode: string;
+          judgeModel: string;
+          judgeProvider: string;
+        };
+        console.log(`[EscrowDeposit] Auto-starting multi-agent execution for task ${taskId}`);
+        const result = await startMultiAgentExecution({
+          taskId,
+          agentIds: cfg.agentIds,
+          maxRounds: cfg.maxRounds,
+          minScoreThreshold: cfg.minScoreThreshold,
+          selectionMode: cfg.selectionMode as SelectionMode,
+          judgeModel: cfg.judgeModel,
+          judgeProvider: cfg.judgeProvider,
+        });
+        if (result.success) {
+          executionData = { executionId: result.executionId!, agentCount: cfg.agentIds.length, maxRounds: cfg.maxRounds };
+          console.log(`[EscrowDeposit] Multi-agent execution started: ${result.executionId}`);
+        } else {
+          console.error(`[EscrowDeposit] Failed to auto-start multi-agent execution: ${result.error}`);
+        }
+      } catch (parseError) {
+        console.error('[EscrowDeposit] Failed to parse multiAgentConfig:', parseError);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       data: lockResult.escrow,
       message: 'Escrow funds locked successfully',
+      ...(executionData && { execution: executionData }),
     });
   } catch (error) {
     console.error('Error locking escrow:', error);
