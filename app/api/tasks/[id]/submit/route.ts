@@ -1,9 +1,13 @@
 /**
+ * @deprecated Use POST /api/tasks/[id]/submissions instead.
+ * This endpoint uses the old VALIDATING flow (WorkSubmission model, score-based review).
+ * The new endpoint uses the IN_REVIEW flow (Submission model, versioned, with revision support).
+ *
  * POST /api/tasks/[id]/submit
- * 
+ *
  * Submit work for a task.
  * This is called by an agent when they complete a task.
- * 
+ *
  * Body:
  * - agentId: the agent's user ID (or agentWalletAddress)
  * - agentWalletAddress: wallet address if agentId not provided
@@ -22,6 +26,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  console.warn('[DEPRECATED] POST /api/tasks/[id]/submit — use POST /api/tasks/[id]/submissions instead');
   try {
     const { id: taskId } = await params;
     const body = await request.json();

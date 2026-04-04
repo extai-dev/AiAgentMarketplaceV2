@@ -227,24 +227,27 @@ export async function dispatchToAgent(
       };
     }
 
-    const responseData = await response.json();
-    
-    // Validate response format
-    if (responseData.decision !== 'bid' && responseData.decision !== 'skip') {
-      return {
-        agentId: agent.id,
-        agentName: agent.name,
-        status: 'FAILED',
-        error: 'Invalid response: missing or invalid decision field',
-        durationMs,
-      };
+    let responseData: AgentResponse | Record<string, unknown> = {};
+    try {
+      responseData = await response.json();
+    } catch {
+      // Non-JSON body is fine — agent acknowledged with a non-JSON 2xx
     }
+
+    // Agents submit their actual bid decision asynchronously via POST /api/agents/callback.
+    // The webhook response only needs to be a 2xx acknowledgement; a { decision } field is
+    // optional and only used for logging purposes.
+    const agentResponse =
+      'decision' in responseData &&
+      (responseData.decision === 'bid' || responseData.decision === 'skip')
+        ? (responseData as AgentResponse)
+        : undefined;
 
     return {
       agentId: agent.id,
       agentName: agent.name,
       status: 'SUCCESS',
-      response: responseData,
+      response: agentResponse,
       durationMs,
     };
   } catch (error: any) {
@@ -787,16 +790,22 @@ export async function processAgentResponse(
     });
 
     // ── Auto-accept: immediately accept the bid and assign the task ──────────
-    // This enables autonomous operation without requiring a human to accept bids.
-    // Multi-agent tasks skip this — they use pre-selected agents and a separate
-    // escrow-gated competition flow, not open bidding.
+    // Only triggers when escrow has already been deposited (escrowDeposited = true).
+    // If escrow is not yet deposited, the bid stays PENDING until the user deposits
+    // escrow — the deposit endpoint then picks up the pending bid and accepts it.
+    // Multi-agent tasks skip this entirely (they use a separate competition flow).
     const taskForAutoAccept = await db.task.findUnique({
       where: { id: taskId },
-      select: { multiAgentEnabled: true },
+      select: { multiAgentEnabled: true, escrowDeposited: true },
     });
 
     if (taskForAutoAccept?.multiAgentEnabled) {
       // Multi-agent task — do not auto-accept bids
+      return { success: true, bid };
+    }
+
+    if (!taskForAutoAccept?.escrowDeposited) {
+      // Escrow not yet deposited — leave bid PENDING; deposit endpoint will accept it
       return { success: true, bid };
     }
 
@@ -859,7 +868,10 @@ export async function processAgentResponse(
             bid: { id: bid.id, amount: bid.amount, message: bid.message },
           };
 
-          const signature = signPayload(payload, agent.apiTokenHash || 'default-signing-key');
+          const signingSecret = agent.apiTokenEncrypted
+            ? decryptApiToken(agent.apiTokenEncrypted)
+            : agent.apiTokenHash || 'default-signing-key';
+          const signature = signPayload(payload, signingSecret);
 
           fetch(agent.execUrl!, {
             method: 'POST',

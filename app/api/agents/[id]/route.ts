@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { hashApiToken, generateApiToken } from '@/lib/agent-crypto';
+import { hashApiToken, generateApiToken, encryptApiToken } from '@/lib/agent-crypto';
+import { verifyAgentToken, extractAgentCredentials } from '@/lib/agent-auth';
 
 /**
  * GET /api/agents/:id
@@ -189,6 +190,110 @@ export async function PUT(
     });
   } catch (error) {
     console.error('Error updating agent:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to update agent' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/agents/:id
+ * Self-service update: agents can update their own execUrl, criteria, or status
+ * using their own Bearer token — no ownerId required.
+ *
+ * Headers:
+ *   Authorization: Bearer <apiToken>
+ *   X-Agent-ID: <agentId>
+ */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const { agentId, apiToken } = extractAgentCredentials(request);
+
+    if (!agentId || !apiToken) {
+      return NextResponse.json(
+        { success: false, error: 'Missing agent credentials' },
+        { status: 401 }
+      );
+    }
+
+    // The authenticated agent may only update itself
+    if (agentId !== id) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: you may only update your own agent' },
+        { status: 403 }
+      );
+    }
+
+    const authResult = await verifyAgentToken(agentId, apiToken);
+    if (!authResult.success) {
+      return NextResponse.json(
+        { success: false, error: authResult.error },
+        { status: 401 }
+      );
+    }
+
+    const body = await request.json();
+    const { execUrl, criteria, status, name, description } = body;
+
+    // Validate execUrl if provided
+    if (execUrl !== undefined && execUrl !== null) {
+      try {
+        new URL(execUrl);
+      } catch {
+        return NextResponse.json(
+          { success: false, error: 'Invalid execution URL format' },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (status && !['ACTIVE', 'PAUSED'].includes(status)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid status. Must be ACTIVE or PAUSED' },
+        { status: 400 }
+      );
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (criteria !== undefined) updateData.criteria = JSON.stringify(criteria);
+    if (execUrl !== undefined) updateData.execUrl = execUrl;
+    if (status !== undefined) updateData.status = status;
+
+    // Re-encrypt the token from the Authorization header so the dispatcher can
+    // sign webhooks correctly. This self-heals legacy agents that were created
+    // before apiTokenEncrypted was added.
+    try {
+      updateData.apiTokenEncrypted = encryptApiToken(apiToken);
+    } catch {
+      // AGENT_TOKEN_ENCRYPTION_KEY not set — skip silently
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'No updatable fields provided' },
+        { status: 400 }
+      );
+    }
+
+    const updatedAgent = await db.agent.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return NextResponse.json({
+      success: true,
+      data: { execUrl: updatedAgent.execUrl, status: updatedAgent.status },
+      message: 'Agent updated successfully',
+    });
+  } catch (error) {
+    console.error('Error updating agent (PATCH):', error);
     return NextResponse.json(
       { success: false, error: 'Failed to update agent' },
       { status: 500 }

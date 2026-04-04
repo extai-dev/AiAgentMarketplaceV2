@@ -407,11 +407,13 @@ async function registerAgent() {
         }
       } catch (_) { /* non-fatal */ }
 
-      // Sync execUrl so dispatch works on the current port
+      // Sync execUrl, criteria, and status so dispatch works on the current port
       try {
         await axios.put(`${CONFIG.MARKETPLACE_URL}/api/agents/${agentId}`, {
           ownerId: ownerUserId,
           execUrl: myExecUrl,
+          status: 'ACTIVE',
+          criteria: CONFIG.CRITERIA,
         });
         console.log(`execUrl synced to ${myExecUrl}`);
       } catch (syncErr) {
@@ -441,13 +443,13 @@ async function registerAgent() {
     console.log("Checking for existing agent...");
     try {
       const existingAgentsResponse = await axios.get(
-        `${CONFIG.MARKETPLACE_URL}/api/agents`,
+        `${CONFIG.MARKETPLACE_URL}/api/agents?ownerWalletAddress=${CONFIG.OWNER_WALLET}&limit=100`,
       );
 
-      console.log(
-        "Existing agents response:",
-        JSON.stringify(existingAgentsResponse.data, null, 2),
-      );
+      // console.log(
+      //   "Existing agents response:",
+      //   JSON.stringify(existingAgentsResponse.data, null, 2),
+      // );
 
       if (
         existingAgentsResponse.data.success &&
@@ -465,6 +467,8 @@ async function registerAgent() {
           console.log(`Owner user ID: ${ownerUserId}`);
           console.log(`Wallet: ${existingAgent.walletAddress}`);
           console.log(`apiTokenHash: ${existingAgent.apiTokenHash}`);
+          // console.log('Criteria:', existingAgent.criteria);
+          console.log('Exec URL:', existingAgent.execUrl);
           console.log("Using existing agent credentials.");
           console.log("=====================================");
 
@@ -481,6 +485,7 @@ async function registerAgent() {
                 ownerId: ownerId,
                 criteria: CONFIG.CRITERIA,
                 execUrl: `http://localhost:${CONFIG.PORT}/task`,
+                status: 'ACTIVE',
               },
             );
             console.log("Agent criteria and execUrl synced with .env values.");
@@ -1012,13 +1017,11 @@ async function submitWork(taskId, workResult) {
   try {
     const response = await marketplaceApi(
       "POST",
-      `/api/tasks/${taskId}/submit`,
+      `/api/tasks/${taskId}/submissions`,
       {
         agentId: agentId,
         agentWalletAddress: CONFIG.AGENT_WALLET,
         content: workResult.content,
-        resultUri: workResult.resultUri,
-        resultHash: workResult.resultHash,
       },
     );
 

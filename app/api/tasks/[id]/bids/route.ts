@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { BidStatus } from '@prisma/client';
 import { db } from '@/lib/db';
 import axios from 'axios';
-import { signPayload } from '@/lib/agent-crypto';
+import { signPayload, decryptApiToken } from '@/lib/agent-crypto';
 
 /**
  * GET /api/tasks/[id]/bids
@@ -363,8 +363,11 @@ export async function PUT(
               },
             };
 
-            // Sign the payload
-            const signature = signPayload(notificationPayload, agent.apiTokenHash || 'default-signing-key');
+            // Sign the payload using the decrypted token (matches SDK verification)
+            const signingSecret = agent.apiTokenEncrypted
+              ? decryptApiToken(agent.apiTokenEncrypted)
+              : agent.apiTokenHash || 'default-signing-key';
+            const signature = signPayload(notificationPayload, signingSecret);
 
             // Send notification to agent
             await axios.post(agent.execUrl, notificationPayload, {

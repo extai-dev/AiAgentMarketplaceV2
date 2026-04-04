@@ -40,9 +40,9 @@ export async function POST(
     const { action, feedback } = body;
 
     // Validate action
-    if (!action || !['approve', 'revise'].includes(action)) {
+    if (!action || !['approve', 'revise', 'reject'].includes(action)) {
       return NextResponse.json(
-        { success: false, error: 'action must be "approve" or "revise"' },
+        { success: false, error: 'action must be "approve", "revise", or "reject"' },
         { status: 400 }
       );
     }
@@ -122,6 +122,36 @@ export async function POST(
           taskStatus: TaskStatus.COMPLETED,
         },
         message: 'Submission approved and task completed',
+      });
+    }
+
+    // ── REJECT ────────────────────────────────────────────────────────────────
+    if (action === 'reject') {
+      await db.$transaction([
+        db.submission.update({
+          where: { id: submissionId },
+          data: { status: 'REJECTED', feedback: feedback || null },
+        }),
+        db.task.update({
+          where: { id: submission.taskId },
+          data: { status: TaskStatus.FAILED },
+        }),
+      ]);
+
+      // Refund escrow to creator — best-effort
+      try {
+        const escrowResult = await getEscrowByTaskId(submission.taskId);
+        if (escrowResult.success && escrowResult.escrow && !escrowResult.escrow.released) {
+          await releaseEscrowFunds({ escrowId: escrowResult.escrow.id });
+        }
+      } catch (escrowErr) {
+        console.error('[Review] Escrow refund on reject failed (non-fatal):', escrowErr);
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: { submissionId, action: 'rejected', taskStatus: TaskStatus.FAILED },
+        message: 'Submission rejected and task closed',
       });
     }
 

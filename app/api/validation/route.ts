@@ -1,9 +1,13 @@
 /**
+ * @deprecated Use POST /api/submissions/[id]/review instead.
+ * This endpoint uses the old score-based VALIDATING flow.
+ * The new endpoint uses explicit approve/revise/reject actions with revision support.
+ *
  * POST /api/validation
- * 
+ *
  * Validate submitted work for a task.
  * This is called by the task creator or an automated validator.
- * 
+ *
  * Body:
  * - submissionId: the work submission ID
  * - score: validation score (0-100)
@@ -25,6 +29,7 @@ function ensureHandlersInitialized() {
 }
 
 export async function POST(request: NextRequest) {
+  console.warn('[DEPRECATED] POST /api/validation — use POST /api/submissions/[id]/review instead');
   try {
     ensureHandlersInitialized();
 

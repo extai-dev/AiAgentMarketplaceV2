@@ -19,6 +19,7 @@ import { emit } from '@/lib/events/eventBus';
 import { EVENTS, EscrowLockedEvent } from '@/lib/events/events';
 import { registerAllHandlers } from '@/lib/events/handlers';
 import { startMultiAgentExecution } from '@/lib/services/multi-agent-orchestrator';
+import { signPayload, decryptApiToken } from '@/lib/agent-crypto';
 
 // Initialize event handlers on first request
 let handlersInitialized = false;
@@ -109,11 +110,110 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ── Single-agent: auto-accept the first PENDING bid now that escrow is locked ──
+    let acceptedBid: { id: string; agentId: string; amount: number } | null = null;
+    if (!task?.multiAgentEnabled) {
+      const pendingBid = await db.bid.findFirst({
+        where: { taskId, status: 'PENDING' },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          agent: {
+            select: { id: true, name: true, execUrl: true, apiTokenEncrypted: true, apiTokenHash: true },
+          },
+        },
+      });
+
+      if (pendingBid) {
+        // Atomically accept the bid and move task to IN_PROGRESS
+        await db.$transaction([
+          db.bid.update({ where: { id: pendingBid.id }, data: { status: 'ACCEPTED' } }),
+          db.task.update({
+            where: { id: taskId },
+            data: { agentId: pendingBid.agentId, status: 'IN_PROGRESS' },
+          }),
+          db.agent.update({
+            where: { id: pendingBid.agentId },
+            data: { acceptedBids: { increment: 1 } },
+          }),
+        ]);
+
+        await db.agentLog.create({
+          data: {
+            agentId: pendingBid.agentId,
+            level: 'INFO',
+            action: 'BID_AUTO_ACCEPTED',
+            taskId,
+            message: 'Bid auto-accepted after escrow deposit.',
+          },
+        });
+
+        acceptedBid = { id: pendingBid.id, agentId: pendingBid.agentId, amount: pendingBid.amount };
+
+        // Notify the agent via webhook (best-effort)
+        if (pendingBid.agent.execUrl) {
+          try {
+            let apiToken: string;
+            if (pendingBid.agent.apiTokenEncrypted) {
+              apiToken = decryptApiToken(pendingBid.agent.apiTokenEncrypted);
+            } else {
+              apiToken = pendingBid.agent.apiTokenHash || 'default-signing-key';
+            }
+
+            const fullTask = await db.task.findUnique({
+              where: { id: taskId },
+              include: { creator: { select: { walletAddress: true, name: true } } },
+            });
+
+            if (fullTask) {
+              const webhookPayload = {
+                type: 'BID_ACCEPTED',
+                timestamp: new Date().toISOString(),
+                notificationId: `escrow-accept-${pendingBid.id}-${Date.now()}`,
+                agent: { id: pendingBid.agent.id, name: pendingBid.agent.name },
+                task: {
+                  id: fullTask.id,
+                  numericId: fullTask.numericId,
+                  title: fullTask.title,
+                  description: fullTask.description,
+                  reward: fullTask.reward,
+                  tokenSymbol: fullTask.tokenSymbol,
+                  status: fullTask.status,
+                  deadline: fullTask.deadline ? fullTask.deadline.toISOString() : null,
+                  escrowDeposited: true,
+                  creator: { walletAddress: fullTask.creator.walletAddress, name: fullTask.creator.name },
+                },
+                bid: { id: pendingBid.id, amount: pendingBid.amount, message: pendingBid.message },
+              };
+
+              const signature = signPayload(webhookPayload, apiToken);
+              fetch(pendingBid.agent.execUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Agent-ID': pendingBid.agent.id,
+                  'X-Signature': signature,
+                  'X-Notification-ID': webhookPayload.notificationId,
+                },
+                body: JSON.stringify(webhookPayload),
+                signal: AbortSignal.timeout(10000),
+              }).catch((err: Error) => {
+                console.warn(`[EscrowDeposit] BID_ACCEPTED webhook failed for agent ${pendingBid.agentId}:`, err.message);
+              });
+            }
+          } catch (webhookErr) {
+            console.warn('[EscrowDeposit] Failed to send BID_ACCEPTED webhook:', webhookErr);
+          }
+        }
+      }
+    }
+    // ── End single-agent auto-accept ──────────────────────────────────────────
+
     return NextResponse.json({
       success: true,
       data: lockResult.escrow,
       message: 'Escrow funds locked successfully',
       ...(executionData && { execution: executionData }),
+      ...(acceptedBid && { acceptedBid }),
     });
   } catch (error) {
     console.error('Error locking escrow:', error);

@@ -45,8 +45,14 @@ import {
   BarChart2,
   GitMerge,
   SplitSquareVertical,
+  Code2,
+  Link,
 } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const statusConfig: Record<TaskStatusType, { label: string; color: string; icon: React.ReactNode }> = {
   OPEN: { label: 'Open for Bids', color: 'bg-blue-500', icon: <Clock className="h-4 w-4" /> },
@@ -79,7 +85,6 @@ export default function TaskDetailPage() {
   const [txHash, setTxHash] = useState<Address | null>(null);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isSubmittingWork, setIsSubmittingWork] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [revisionFeedback, setRevisionFeedback] = useState('');
   const [showRevisionInput, setShowRevisionInput] = useState(false);
@@ -87,15 +92,14 @@ export default function TaskDetailPage() {
   // Work submission form state
   const [workContent, setWorkContent] = useState('');
   const [resultUri, setResultUri] = useState('');
+  const [submissionType, setSubmissionType] = useState<'text' | 'code' | 'url'>('text');
+  const [codeLanguage, setCodeLanguage] = useState('javascript');
 
   // Multi-agent state
   const [multiAgentExecution, setMultiAgentExecution] = useState<any>(null);
   const [isDepositingEscrow, setIsDepositingEscrow] = useState(false);
   const [expandedRound, setExpandedRound] = useState<number | null>(null);
 
-  // Validation form state
-  const [validationScore, setValidationScore] = useState(100);
-  const [validationComments, setValidationComments] = useState('');
 
   // Simple escrow addresses
   const escrowAddress = SIMPLE_ESCROW_ADDRESS as Address;
@@ -289,8 +293,9 @@ export default function TaskDetailPage() {
 
   // Submit Work - Agent submits work for validation
   const handleSubmitWork = async () => {
-    if (!task || !isAgent || !workContent.trim()) return;
-    
+    if (!task || !isAgent) return;
+    if (submissionType === 'url' ? !resultUri.trim() : !workContent.trim()) return;
+
     if (!hasEscrow) {
       toast({
         title: 'Cannot Submit Work',
@@ -300,16 +305,29 @@ export default function TaskDetailPage() {
       return;
     }
 
+    // Format content and build metadata based on submission type
+    let finalContent = workContent;
+    const filesMetadata: Record<string, string> = { _type: submissionType };
+    if (submissionType === 'code') {
+      finalContent = `\`\`\`${codeLanguage}\n${workContent}\n\`\`\``;
+      filesMetadata._language = codeLanguage;
+    } else if (submissionType === 'url') {
+      finalContent = workContent.trim()
+        ? `${resultUri.trim()}\n\n${workContent.trim()}`
+        : resultUri.trim();
+    }
+
     setIsSubmittingWork(true);
     try {
-      const response = await fetch(`/api/tasks/${task.id}/submit`, {
+      const response = await fetch(`/api/tasks/${task.id}/submissions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agentWalletAddress: address,
-          content: workContent,
-          resultUri: resultUri || undefined,
+          content: finalContent,
+          resultUri: submissionType === 'url' ? resultUri || undefined : resultUri || undefined,
           resultHash: resultUri ? `hash://${Date.now()}` : undefined,
+          files: JSON.stringify(filesMetadata),
         }),
       });
 
@@ -321,6 +339,8 @@ export default function TaskDetailPage() {
         });
         setWorkContent('');
         setResultUri('');
+        setSubmissionType('text');
+        setCodeLanguage('javascript');
         refreshTask();
       } else {
         throw new Error(result.error || 'Failed to submit work');
@@ -337,47 +357,6 @@ export default function TaskDetailPage() {
     }
   };
 
-  // Validate Work - Task creator validates submitted work
-  const handleValidateWork = async (approved: boolean) => {
-    if (!task || !isCreator || !workSubmission) return;
-
-    setIsValidating(true);
-    try {
-      const response = await fetch('/api/validation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          submissionId: workSubmission.id,
-          score: approved ? validationScore : Math.max(0, validationScore - 100),
-          comments: validationComments,
-          validatedBy: user?.id,
-        }),
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        toast({
-          title: approved ? 'Work Approved!' : 'Work Rejected',
-          description: approved 
-            ? 'The work has been approved. You can now release payment.'
-            : 'The work has been rejected. The agent can resubmit.',
-        });
-        setValidationComments('');
-        refreshTask();
-      } else {
-        throw new Error(result.error || 'Failed to validate work');
-      }
-    } catch (error: any) {
-      console.error('Error validating work:', error);
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive',
-      });
-    } finally {
-      setIsValidating(false);
-    }
-  };
 
   // Fetch work submission for this task
   const fetchWorkSubmission = async () => {
@@ -580,8 +559,8 @@ export default function TaskDetailPage() {
     }
   };
 
-  // Review Submission - approve or request revision
-  const handleReviewSubmission = async (action: 'approve' | 'revise') => {
+  // Review Submission - approve, reject, or request revision
+  const handleReviewSubmission = async (action: 'approve' | 'revise' | 'reject') => {
     const latestSubmission = submissions.filter(s => s.status === 'SUBMITTED').slice(-1)[0];
     if (!latestSubmission || !isCreator) return;
 
@@ -600,12 +579,12 @@ export default function TaskDetailPage() {
 
       const result = await response.json();
       if (result.success) {
-        toast({
-          title: action === 'approve' ? 'Submission Approved!' : 'Revision Requested',
-          description: action === 'approve'
-            ? 'Task completed and escrow released.'
-            : 'Agent has been notified to revise.',
-        });
+        const toastMap = {
+          approve: { title: 'Submission Approved!', description: 'Task completed and escrow released.' },
+          revise:  { title: 'Revision Requested',   description: 'Agent has been notified to revise.' },
+          reject:  { title: 'Submission Rejected',  description: 'Task closed and escrow refunded.' },
+        };
+        toast(toastMap[action]);
         setRevisionFeedback('');
         setShowRevisionInput(false);
         refreshTask();
@@ -669,6 +648,83 @@ export default function TaskDetailPage() {
 
   const status = statusConfig[task.status];
   const isLoadingTx = isConfirming || isReleasing;
+
+  // Renders submission content formatted by type (markdown, code, URL, plain text)
+  const SubmissionContentRenderer = ({ content, files }: { content: string; files?: string | null }) => {
+    let meta: Record<string, string> = {};
+    let extraFiles: { name: string }[] = [];
+    if (files) {
+      try {
+        const parsed = JSON.parse(files);
+        Object.entries(parsed).forEach(([k, v]) => {
+          if (k.startsWith('_')) meta[k] = v as string;
+          else extraFiles.push({ name: k });
+        });
+      } catch {}
+    }
+
+    const isUrl = meta._type === 'url' || (!meta._type && /^https?:\/\/\S+$/.test(content.trim()));
+
+    if (isUrl) {
+      const [rawUrl, ...rest] = content.split(/\n\n/);
+      const desc = rest.join('\n\n').trim();
+      return (
+        <div className="space-y-2">
+          <a
+            href={rawUrl.trim()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline break-all"
+          >
+            <ExternalLink className="h-3 w-3 shrink-0" />
+            {rawUrl.trim()}
+          </a>
+          {desc && <p className="text-sm text-muted-foreground whitespace-pre-wrap">{desc}</p>}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        <div className="text-sm [&_pre]:overflow-x-auto [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_h1]:font-bold [&_h1]:text-base [&_h2]:font-semibold [&_h2]:text-sm [&_a]:text-blue-600 [&_a]:underline [&_p]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground">
+          <ReactMarkdown
+            components={{
+              code({ className, children, ...props }: any) {
+                const match = /language-(\w+)/.exec(className || '');
+                return match ? (
+                  <SyntaxHighlighter
+                    style={oneDark}
+                    language={match[1]}
+                    PreTag="div"
+                    className="rounded-md text-xs"
+                  >
+                    {String(children).replace(/\n$/, '')}
+                  </SyntaxHighlighter>
+                ) : (
+                  <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono" {...props}>
+                    {children}
+                  </code>
+                );
+              },
+            }}
+          >
+            {content}
+          </ReactMarkdown>
+        </div>
+        {extraFiles.length > 0 && (
+          <div className="border-t pt-2 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Attached files</p>
+            {extraFiles.map((f) => (
+              <div key={f.name} className="flex items-center gap-2 text-xs text-muted-foreground">
+                <FileText className="h-3 w-3" />
+                <span>{f.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -1243,28 +1299,102 @@ export default function TaskDetailPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {/* Submission type selector */}
                   <div>
-                    <label className="text-sm font-medium">Work Description</label>
-                    <Textarea
-                      value={workContent}
-                      onChange={(e) => setWorkContent(e.target.value)}
-                      placeholder="Describe the work you have completed..."
-                      rows={4}
-                      className="mt-1"
-                    />
+                    <label className="text-sm font-medium">Submission Type</label>
+                    <div className="flex gap-2 mt-1">
+                      {(['text', 'code', 'url'] as const).map((type) => (
+                        <Button
+                          key={type}
+                          type="button"
+                          size="sm"
+                          variant={submissionType === type ? 'default' : 'outline'}
+                          onClick={() => setSubmissionType(type)}
+                          className="gap-1"
+                        >
+                          {type === 'code' && <Code2 className="h-3 w-3" />}
+                          {type === 'url' && <Link className="h-3 w-3" />}
+                          {type === 'text' && <FileText className="h-3 w-3" />}
+                          {type === 'text' ? 'Description' : type === 'url' ? 'URL / Link' : 'Code'}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-sm font-medium">Result URI (Optional)</label>
-                    <Input
-                      value={resultUri}
-                      onChange={(e) => setResultUri(e.target.value)}
-                      placeholder="ipfs:// or http://..."
-                      className="mt-1"
-                    />
-                  </div>
+
+                  {/* Code: language selector */}
+                  {submissionType === 'code' && (
+                    <div>
+                      <label className="text-sm font-medium">Language</label>
+                      <Select value={codeLanguage} onValueChange={setCodeLanguage}>
+                        <SelectTrigger className="mt-1 w-full">
+                          <SelectValue placeholder="Select language" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {['python', 'javascript', 'typescript', 'bash', 'sql', 'json', 'html', 'css', 'rust', 'go'].map((lang) => (
+                            <SelectItem key={lang} value={lang}>{lang}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* URL type: URL field + optional description */}
+                  {submissionType === 'url' ? (
+                    <>
+                      <div>
+                        <label className="text-sm font-medium">URL</label>
+                        <Input
+                          value={resultUri}
+                          onChange={(e) => setResultUri(e.target.value)}
+                          placeholder="https://..."
+                          type="url"
+                          className="mt-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">
+                          Description <span className="text-muted-foreground font-normal">(optional)</span>
+                        </label>
+                        <Textarea
+                          value={workContent}
+                          onChange={(e) => setWorkContent(e.target.value)}
+                          placeholder="Brief description of what this link contains..."
+                          rows={2}
+                          className="mt-1"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    /* Text / Code: single textarea */
+                    <div>
+                      <label className="text-sm font-medium">
+                        {submissionType === 'code' ? 'Code' : 'Work Description'}
+                      </label>
+                      {submissionType === 'text' && (
+                        <p className="text-xs text-muted-foreground mt-0.5">Markdown is supported.</p>
+                      )}
+                      <Textarea
+                        value={workContent}
+                        onChange={(e) => setWorkContent(e.target.value)}
+                        placeholder={
+                          submissionType === 'code'
+                            ? `Paste your ${codeLanguage} code here...`
+                            : 'Describe the work you have completed...'
+                        }
+                        rows={submissionType === 'code' ? 8 : 4}
+                        className={
+                          submissionType === 'code'
+                            ? 'mt-1 font-mono text-sm'
+                            : 'mt-1'
+                        }
+                        spellCheck={submissionType !== 'code'}
+                      />
+                    </div>
+                  )}
+
                   <Button
                     onClick={handleSubmitWork}
-                    disabled={isSubmittingWork || !workContent.trim()}
+                    disabled={isSubmittingWork || (submissionType === 'url' ? !resultUri.trim() : !workContent.trim())}
                     className="w-full gap-2"
                   >
                     {isSubmittingWork ? (
@@ -1295,7 +1425,10 @@ export default function TaskDetailPage() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="p-3 bg-muted rounded-lg max-h-64 overflow-y-auto">
-                      <p className="text-sm whitespace-pre-wrap">{latestSubmission.content}</p>
+                      <SubmissionContentRenderer
+                        content={latestSubmission.content}
+                        files={latestSubmission.files}
+                      />
                     </div>
 
                     {submissions.length > 1 && (
@@ -1318,7 +1451,7 @@ export default function TaskDetailPage() {
                               <Button
                                 onClick={() => handleReviewSubmission('revise')}
                                 disabled={isReviewing || !revisionFeedback.trim()}
-                                variant="destructive"
+                                variant="outline"
                                 className="flex-1 gap-2"
                               >
                                 {isReviewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
@@ -1342,6 +1475,15 @@ export default function TaskDetailPage() {
                             >
                               {isReviewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                               Approve
+                            </Button>
+                            <Button
+                              onClick={() => handleReviewSubmission('reject')}
+                              disabled={isReviewing}
+                              variant="destructive"
+                              className="flex-1 gap-2"
+                            >
+                              {isReviewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                              Reject
                             </Button>
                             <Button
                               onClick={() => setShowRevisionInput(true)}
@@ -1379,6 +1521,11 @@ export default function TaskDetailPage() {
                           {sub.status}
                         </Badge>
                       </div>
+                      {sub.content && (
+                        <p className="text-xs text-muted-foreground truncate" title={sub.content}>
+                          {sub.content.slice(0, 100)}{sub.content.length > 100 ? '…' : ''}
+                        </p>
+                      )}
                       {sub.feedback && (
                         <p className="text-muted-foreground text-xs">Feedback: {sub.feedback}</p>
                       )}
@@ -1400,87 +1547,6 @@ export default function TaskDetailPage() {
               </div>
             )}
 
-            {/* Work Validation Form - For Creator */}
-            {task.status === 'VALIDATING' && isCreator && workSubmission && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Shield className="h-4 w-4" />
-                    Validate Work
-                  </CardTitle>
-                  <CardDescription>
-                    Review and validate the submitted work
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="p-3 bg-muted rounded-lg">
-                    <p className="text-sm font-medium mb-1">Submitted Work:</p>
-                    <p className="text-sm text-muted-foreground">{workSubmission.content}</p>
-                    {workSubmission.resultUri && (
-                      <a 
-                        href={workSubmission.resultUri} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-sm text-blue-500 hover:underline"
-                      >
-                        View Result
-                      </a>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">Score (0-100)</label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={validationScore}
-                      onChange={(e) => setValidationScore(parseInt(e.target.value) || 0)}
-                      className="mt-1"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Score ≥70 passes validation
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">Comments</label>
-                    <Textarea
-                      value={validationComments}
-                      onChange={(e) => setValidationComments(e.target.value)}
-                      placeholder="Provide feedback on the work..."
-                      rows={3}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={() => handleValidateWork(true)}
-                      disabled={isValidating}
-                      className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
-                    >
-                      {isValidating ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="h-4 w-4" />
-                      )}
-                      Approve
-                    </Button>
-                    <Button
-                      onClick={() => handleValidateWork(false)}
-                      disabled={isValidating}
-                      variant="destructive"
-                      className="flex-1 gap-2"
-                    >
-                      {isValidating ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <XCircle className="h-4 w-4" />
-                      )}
-                      Reject
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
 
             {/* Work Submission Status */}
             {workSubmission && (
